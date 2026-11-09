@@ -98,26 +98,26 @@ Every single request (except global superadmin routes) passes through the `resol
 ```mermaid
 sequenceDiagram
     autonumber
-    actor User as Client Request
+    actor Client as Client Request
     participant MW as resolveTenant Middleware
     participant DB as PostgreSQL (restaurants)
     participant Route as Controller / Business Handler
 
-    User->>MW: Request with Host / Header / Query
+    Client->>MW: Request with Host / Header / Query
     alt Checked in Priority Order
         MW->>MW: 1. Header: x-restaurant-slug
         MW->>MW: 2. Query param: ?resto=slug
         MW->>MW: 3. Subdomain: slug.domain.com
         MW->>MW: 4. Host header: custom-domain.com
     end
-    MW->>DB: SELECT * FROM restaurants WHERE slug = $1 OR primary_domain = $2
+    MW->>DB: Query tenant by slug or primary_domain
     alt Tenant Not Found
-        MW-->>User: 404 NOT_FOUND (Restaurant Not Found)
-    else Tenant Suspended (status = 'suspended')
-        MW-->>User: 503 SERVICE_UNAVAILABLE (Maintenance Notice)
+        MW-->>Client: 404 NOT_FOUND (Restaurant Not Found)
+    else Tenant Suspended
+        MW-->>Client: 503 SERVICE_UNAVAILABLE (Maintenance Notice)
     else Tenant Active
-        MW->>Route: req.restaurant = tenant; next()
-        Route-->>User: Scoped Multi-Tenant Response
+        MW->>Route: Set req.restaurant and proceed
+        Route-->>Client: Scoped Multi-Tenant Response
     end
 ```
 
