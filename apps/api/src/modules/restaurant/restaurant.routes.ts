@@ -1,0 +1,122 @@
+import { Router, Request, Response } from 'express';
+import crypto from 'crypto';
+import { resolveTenant } from '../../middleware/tenant.js';
+import { query, withTransaction } from '../../db/index.js';
+
+export const restaurantRouter = Router();
+
+// Public Restaurant Dynamic Branding & Settings
+restaurantRouter.get('/restaurant', resolveTenant, (req: Request, res: Response) => {
+  const r = req.restaurant!;
+  const s = req.restaurantSettings!;
+
+  res.json({
+    restaurant: {
+      id: r.id,
+      name: r.name,
+      slug: r.slug,
+      primary_domain: r.primary_domain,
+      logo_url: r.logo_url,
+      favicon_url: r.favicon_url,
+      primary_color: r.primary_color,
+      secondary_color: r.secondary_color,
+      currency: r.currency,
+      timezone: r.timezone,
+      status: r.status,
+    },
+    settings: {
+      tax_rate_percent: Number(s.tax_rate_percent),
+      service_charge_percent: Number(s.service_charge_percent),
+      packaging_charge_paise: s.packaging_charge_paise,
+      dine_in_enabled: s.dine_in_enabled,
+      takeaway_enabled: s.takeaway_enabled,
+      loyalty_enabled: s.loyalty_enabled,
+      loyalty_earn_ratio: Number(s.loyalty_earn_ratio),
+    }
+  });
+});
+
+// Resolve Opaque QR Token
+restaurantRouter.get('/qr/resolve', resolveTenant, async (req: Request, res: Response) => {
+  const token = req.query.t as string;
+  const restaurant = req.restaurant!;
+
+  if (!token) {
+    res.status(400).json({ error: 'MISSING_TOKEN', message: 'Valid opaque QR token is required.' });
+    return;
+  }
+
+  try {
+    const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
+
+    const qrResult = await query(
+      `SELECT qt.*, dt.table_number, dt.capacity, dt.status as table_status, dt.is_active as table_active
+       FROM table_qr_tokens qt
+       JOIN dining_tables dt ON dt.id = qt.table_id
+       WHERE qt.token_hash = $1 AND qt.restaurant_id = $2 AND qt.is_revoked = false`,
+      [tokenHash, restaurant.id]
+    );
+
+    if (qrResult.rows.length === 0) {
+      res.status(404).json({ error: 'INVALID_QR', message: 'This QR code is invalid or has been revoked.' });
+      return;
+    }
+
+    const qr = qrResult.rows[0];
+
+    if (!qr.table_active || qr.table_status === 'out_of_service') {
+      res.status(403).json({ error: 'TABLE_UNAVAILABLE', message: 'This table is currently unavailable for ordering.' });
+      return;
+    }
+
+    // Resolve or create active table session atomically
+    const session = await withTransaction(async (client) => {
+      let activeSession = await client.query(
+        `SELECT * FROM table_sessions 
+         WHERE restaurant_id = $1 AND table_id = $2 AND status != 'closed'
+         ORDER BY opened_at DESC LIMIT 1`,
+        [restaurant.id, qr.table_id]
+      );
+
+      if (activeSession.rows.length === 0) {
+        activeSession = await client.query(
+          `INSERT INTO table_sessions (restaurant_id, table_id, status)
+           VALUES ($1, $2, 'open')
+           RETURNING *`,
+          [restaurant.id, qr.table_id]
+        );
+
+        // Update table status to occupied
+        await client.query(
+          `UPDATE dining_tables SET status = 'occupied' WHERE id = $1`,
+          [qr.table_id]
+        );
+      }
+
+      return activeSession.rows[0];
+    });
+
+    res.json({
+      valid: true,
+      restaurant: {
+        id: restaurant.id,
+        name: restaurant.name,
+        logo_url: restaurant.logo_url,
+        primary_color: restaurant.primary_color
+      },
+      table: {
+        id: qr.table_id,
+        table_number: qr.table_number,
+        capacity: qr.capacity
+      },
+      session: {
+        id: session.id,
+        status: session.status,
+        opened_at: session.opened_at
+      }
+    });
+  } catch (err: any) {
+    console.error('QR resolve error:', err);
+    res.status(500).json({ error: 'SERVER_ERROR', message: 'Failed to resolve QR token.' });
+  }
+});

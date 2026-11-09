@@ -1,0 +1,23 @@
+{
+  "name": "smart-restaurant-platform",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Multi-tenant Smart Restaurant Operations & QR Ordering SaaS",
+  "workspaces": [
+    "apps/*"
+  ],
+  "scripts": {
+    "dev": "concurrently \"npm run dev --workspace=apps/api\" \"npm run dev --workspace=apps/website\"",
+    "dev:api": "npm run dev --workspace=apps/api",
+    "dev:website": "npm run dev --workspace=apps/website",
+    "build": "npm run build --workspace=apps/api && npm run build --workspace=apps/website",
+    "test": "npm run test --workspace=apps/api"
+  },
+  "devDependencies": {
+    "@types/ws": "^8.18.2",
+    "concurrently": "^8.2.2"
+  },
+  "dependencies": {
+    "ws": "^8.22.2"
+  }
+}

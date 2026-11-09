@@ -1,0 +1,191 @@
+import React from 'react';
+import { useNavigate } from 'react-router-dom';
+import { ArrowLeft, Trash2, Plus, Minus, ArrowRight, Utensils, ShoppingBag } from 'lucide-react';
+import { useCart } from '../../context/CartContext.js';
+import { useTenant } from '../../context/TenantContext.js';
+
+export const CustomerCart: React.FC = () => {
+  const navigate = useNavigate();
+  const { restaurant, settings } = useTenant();
+  const {
+    items,
+    orderType,
+    setOrderType,
+    tableContext,
+    subtotalPaise,
+    taxPaise,
+    packagingChargePaise,
+    grandTotalPaise,
+    updateQuantity,
+    removeFromCart,
+    clearCart
+  } = useCart();
+
+  if (items.length === 0) {
+    return (
+      <div className="min-h-screen bg-slate-50 dark:bg-slate-950 flex flex-col items-center justify-center p-4 text-center">
+        <div className="w-16 h-16 rounded-3xl bg-slate-100 dark:bg-slate-800 text-slate-400 flex items-center justify-center mb-4">
+          <ShoppingBag className="w-8 h-8" />
+        </div>
+        <h2 className="text-xl font-bold text-slate-900 dark:text-white mb-1">Your cart is empty</h2>
+        <p className="text-xs text-slate-500 mb-6">Explore our menu and add your favorite dishes</p>
+        <button
+          onClick={() => navigate('/u/customer/menu')}
+          className="bg-rose-600 hover:bg-rose-500 text-white font-bold py-3 px-6 rounded-xl text-sm transition-all"
+          style={{ backgroundColor: restaurant?.primary_color || undefined }}
+        >
+          Browse Menu
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 pb-32">
+      {/* Top Header */}
+      <header className="sticky top-0 z-30 bg-white/90 dark:bg-slate-900/90 backdrop-blur border-b border-slate-200/80 dark:border-slate-800">
+        <div className="max-w-xl mx-auto px-4 h-14 flex items-center justify-between">
+          <button
+            onClick={() => navigate('/u/customer/menu')}
+            className="text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white flex items-center gap-1.5 text-xs font-semibold"
+          >
+            <ArrowLeft className="w-4 h-4" />
+            Back to Menu
+          </button>
+          <h1 className="font-bold text-sm">Your Order Summary</h1>
+          <button
+            onClick={clearCart}
+            className="text-rose-600 dark:text-rose-400 text-xs font-semibold"
+          >
+            Clear
+          </button>
+        </div>
+      </header>
+
+      <main className="max-w-xl mx-auto px-4 py-6 space-y-6">
+        {/* Dining Mode Selector */}
+        <div className="bg-slate-200/60 dark:bg-slate-800/60 p-1 rounded-2xl flex text-xs font-bold">
+          <button
+            onClick={() => setOrderType('dine_in')}
+            disabled={!tableContext.tableId}
+            className={`flex-1 py-2.5 rounded-xl transition-all flex items-center justify-center gap-2 ${
+              orderType === 'dine_in'
+                ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-sm'
+                : 'text-slate-500 disabled:opacity-40'
+            }`}
+          >
+            <Utensils className="w-3.5 h-3.5" />
+            <span>Dine-In {tableContext.tableNumber ? `(Table ${tableContext.tableNumber})` : ''}</span>
+          </button>
+          <button
+            onClick={() => setOrderType('takeaway')}
+            className={`flex-1 py-2.5 rounded-xl transition-all flex items-center justify-center gap-2 ${
+              orderType === 'takeaway'
+                ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-sm'
+                : 'text-slate-500'
+            }`}
+          >
+            <ShoppingBag className="w-3.5 h-3.5" />
+            <span>Takeaway</span>
+          </button>
+        </div>
+
+        {/* Cart Line Items */}
+        <div className="bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 rounded-3xl p-5 divide-y divide-slate-100 dark:divide-slate-800">
+          {items.map((item) => (
+            <div key={item.id} className="py-4 first:pt-0 last:pb-0 flex items-start justify-between gap-4">
+              <div className="space-y-1">
+                <div className="flex items-center gap-1.5">
+                  <span className={`w-2 h-2 rounded-full ${
+                    item.menuItem.dietary_type === 'veg' ? 'bg-emerald-500' : 'bg-rose-500'
+                  }`}></span>
+                  <div className="font-bold text-xs sm:text-sm text-slate-900 dark:text-white">
+                    {item.menuItem.name}
+                  </div>
+                </div>
+
+                {item.selectedVariant && (
+                  <div className="text-[11px] text-slate-500 dark:text-slate-400 font-medium">
+                    Portion: {item.selectedVariant.name}
+                  </div>
+                )}
+
+                {item.selectedModifiers.length > 0 && (
+                  <div className="text-[11px] text-slate-500 dark:text-slate-400">
+                    Modifiers: {item.selectedModifiers.map((m) => m.name).join(', ')}
+                  </div>
+                )}
+
+                <div className="text-xs font-bold text-slate-900 dark:text-white pt-1">
+                  ₹{(item.totalPricePaise / 100).toFixed(0)}
+                </div>
+              </div>
+
+              {/* Quantity Changer */}
+              <div className="flex items-center border border-slate-200 dark:border-slate-700 rounded-xl bg-slate-50 dark:bg-slate-800/60 p-1 shrink-0">
+                <button
+                  onClick={() => updateQuantity(item.id, -1)}
+                  className="w-7 h-7 rounded-lg flex items-center justify-center text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700"
+                >
+                  {item.quantity === 1 ? <Trash2 className="w-3.5 h-3.5 text-rose-500" /> : <Minus className="w-3.5 h-3.5" />}
+                </button>
+                <span className="w-7 text-center text-xs font-bold">{item.quantity}</span>
+                <button
+                  onClick={() => updateQuantity(item.id, 1)}
+                  className="w-7 h-7 rounded-lg flex items-center justify-center text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {/* Bill Breakdown Box */}
+        <div className="bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 rounded-3xl p-5 space-y-3 text-xs">
+          <div className="text-xs font-bold uppercase tracking-wider text-slate-400">Bill Breakdown</div>
+          
+          <div className="flex justify-between text-slate-600 dark:text-slate-400">
+            <span>Item Subtotal</span>
+            <span>₹{(subtotalPaise / 100).toFixed(2)}</span>
+          </div>
+
+          <div className="flex justify-between text-slate-600 dark:text-slate-400">
+            <span>GST ({settings?.tax_rate_percent || 5}%)</span>
+            <span>₹{(taxPaise / 100).toFixed(2)}</span>
+          </div>
+
+          {orderType === 'takeaway' && packagingChargePaise > 0 && (
+            <div className="flex justify-between text-slate-600 dark:text-slate-400">
+              <span>Packaging Charges</span>
+              <span>₹{(packagingChargePaise / 100).toFixed(2)}</span>
+            </div>
+          )}
+
+          <div className="pt-3 border-t border-slate-100 dark:border-slate-800 flex justify-between font-black text-sm text-slate-900 dark:text-white">
+            <span>To Pay (approx)</span>
+            <span>₹{(grandTotalPaise / 100).toFixed(2)}</span>
+          </div>
+        </div>
+      </main>
+
+      {/* Sticky Bottom Checkout Trigger */}
+      <div className="fixed bottom-4 left-4 right-4 z-40 max-w-xl mx-auto">
+        <button
+          onClick={() => navigate('/u/customer/checkout')}
+          className="w-full bg-rose-600 hover:bg-rose-500 text-white rounded-2xl p-4 shadow-xl shadow-rose-900/30 flex items-center justify-between font-bold text-sm transition-transform active:scale-98"
+          style={{ backgroundColor: restaurant?.primary_color || undefined }}
+        >
+          <div>
+            <div className="text-xs text-rose-100">Step 2: Customer Mobile</div>
+            <div className="text-base font-black">₹{(grandTotalPaise / 100).toFixed(0)}</div>
+          </div>
+          <div className="flex items-center gap-1">
+            <span>Proceed to Checkout</span>
+            <ArrowRight className="w-4 h-4" />
+          </div>
+        </button>
+      </div>
+    </div>
+  );
+};
