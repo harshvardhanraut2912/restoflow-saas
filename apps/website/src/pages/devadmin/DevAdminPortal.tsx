@@ -20,6 +20,7 @@ import {
   AlertTriangle
 } from 'lucide-react';
 import { devadminApi } from '../../services/api.js';
+import { ThemeToggle } from '../../components/ThemeToggle.js';
 
 export const DevAdminPortal: React.FC = () => {
   // Auth state
@@ -274,6 +275,7 @@ export const DevAdminPortal: React.FC = () => {
           </div>
 
           <div className="flex items-center gap-3">
+            <ThemeToggle />
             <button
               onClick={() => setIsModalOpen(true)}
               className="bg-rose-600 hover:bg-rose-500 text-white px-4 py-2 rounded-xl text-xs font-semibold flex items-center gap-2 transition-all shadow-md shadow-rose-900/20"

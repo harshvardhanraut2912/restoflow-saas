@@ -3,6 +3,7 @@ import { BrowserRouter, Routes, Route, Navigate, Link } from 'react-router-dom';
 import { TenantProvider, useTenant } from './context/TenantContext.js';
 import { CartProvider } from './context/CartContext.js';
 import { StaffAuthProvider } from './context/StaffAuthContext.js';
+import { ThemeProvider } from './context/ThemeContext.js';
 import { SuspendedNotice } from './components/SuspendedNotice.js';
 
 // DevAdmin
@@ -144,36 +145,38 @@ export const App: React.FC = () => {
       <StaffAuthProvider>
         <CartProvider>
           <BrowserRouter>
-            <TenantRouteWrapper>
-              <Routes>
-                {/* Platform Landing & Portal Switcher */}
-                <Route path="/" element={<PlatformLanding />} />
+            <ThemeProvider>
+              <TenantRouteWrapper>
+                <Routes>
+                  {/* Platform Landing & Portal Switcher */}
+                  <Route path="/" element={<PlatformLanding />} />
 
-                {/* DevAdmin Portal (Dedicated Superadmin Route requested by user) */}
-                <Route path="/d/devadmin" element={<DevAdminPortal />} />
+                  {/* DevAdmin Portal (Dedicated Superadmin Route requested by user) */}
+                  <Route path="/d/devadmin" element={<DevAdminPortal />} />
 
-                {/* Customer QR Dining Routes */}
-                <Route path="/u/customer/table" element={<TableEntry />} />
-                <Route path="/u/customer/menu" element={<CustomerMenu />} />
-                <Route path="/u/customer/cart" element={<CustomerCart />} />
-                <Route path="/u/customer/checkout" element={<CustomerCheckout />} />
-                <Route path="/u/customer/order/:orderId" element={<CustomerOrderTracking />} />
-                <Route path="/u/customer/bill" element={<CustomerRunningBill />} />
-                <Route path="/u/customer/receipt/:receiptToken" element={<CustomerReceipt />} />
+                  {/* Customer QR Dining Routes */}
+                  <Route path="/u/customer/table" element={<TableEntry />} />
+                  <Route path="/u/customer/menu" element={<CustomerMenu />} />
+                  <Route path="/u/customer/cart" element={<CustomerCart />} />
+                  <Route path="/u/customer/checkout" element={<CustomerCheckout />} />
+                  <Route path="/u/customer/order/:orderId" element={<CustomerOrderTracking />} />
+                  <Route path="/u/customer/bill" element={<CustomerRunningBill />} />
+                  <Route path="/u/customer/receipt/:receiptToken" element={<CustomerReceipt />} />
 
-                {/* Staff Login */}
-                <Route path="/s/login" element={<StaffLogin />} />
+                  {/* Staff Login */}
+                  <Route path="/s/login" element={<StaffLogin />} />
 
-                {/* Staff Views */}
-                <Route path="/s/kitchen/dashboard" element={<KitchenKDS />} />
-                <Route path="/s/waiter/dashboard" element={<WaiterFloor />} />
-                <Route path="/s/waiter/tables" element={<WaiterFloor />} />
-                <Route path="/s/manager/*" element={<ManagerDashboard />} />
+                  {/* Staff Views */}
+                  <Route path="/s/kitchen/dashboard" element={<KitchenKDS />} />
+                  <Route path="/s/waiter/dashboard" element={<WaiterFloor />} />
+                  <Route path="/s/waiter/tables" element={<WaiterFloor />} />
+                  <Route path="/s/manager/*" element={<ManagerDashboard />} />
 
-                {/* Catch All */}
-                <Route path="*" element={<Navigate to="/" replace />} />
-              </Routes>
-            </TenantRouteWrapper>
+                  {/* Catch All */}
+                  <Route path="*" element={<Navigate to="/" replace />} />
+                </Routes>
+              </TenantRouteWrapper>
+            </ThemeProvider>
           </BrowserRouter>
         </CartProvider>
       </StaffAuthProvider>

@@ -19,6 +19,7 @@ import {
 import { managerApi, publicApi } from '../../services/api.js';
 import { useStaffAuth } from '../../context/StaffAuthContext.js';
 import { useTenant } from '../../context/TenantContext.js';
+import { ThemeToggle } from '../../components/ThemeToggle.js';
 
 export const ManagerDashboard: React.FC = () => {
   const { user, logout } = useStaffAuth();
@@ -319,6 +320,10 @@ export const ManagerDashboard: React.FC = () => {
         </div>
 
         <div className="pt-4 border-t border-slate-800 space-y-3">
+          <div className="flex items-center justify-between">
+            <span className="text-xs text-slate-400">Theme</span>
+            <ThemeToggle />
+          </div>
           <div className="text-xs text-slate-400">
             Manager: <span className="text-white font-semibold">{user?.fullName}</span>
           </div>

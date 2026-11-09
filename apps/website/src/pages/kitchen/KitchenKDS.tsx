@@ -13,6 +13,7 @@ import {
 import { kitchenApi } from '../../services/api.js';
 import { useStaffAuth } from '../../context/StaffAuthContext.js';
 import { useTenant } from '../../context/TenantContext.js';
+import { ThemeToggle } from '../../components/ThemeToggle.js';
 
 export const KitchenKDS: React.FC = () => {
   const { user, logout } = useStaffAuth();
@@ -101,6 +102,7 @@ export const KitchenKDS: React.FC = () => {
         </div>
 
         <div className="flex items-center gap-3">
+          <ThemeToggle />
           <button
             onClick={() => setSoundEnabled(!soundEnabled)}
             className={`p-2.5 rounded-xl border text-xs font-semibold flex items-center gap-1.5 transition-colors ${

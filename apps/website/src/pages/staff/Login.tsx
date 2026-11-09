@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { Lock, Mail, Users, AlertCircle, RefreshCw } from 'lucide-react';
 import { useStaffAuth } from '../../context/StaffAuthContext.js';
 import { useTenant } from '../../context/TenantContext.js';
+import { ThemeToggle } from '../../components/ThemeToggle.js';
 
 export const StaffLogin: React.FC = () => {
   const navigate = useNavigate();
@@ -36,8 +37,11 @@ export const StaffLogin: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen bg-slate-950 flex flex-col justify-center items-center p-4">
-      <div className="max-w-md w-full bg-slate-900 border border-slate-800 rounded-3xl p-8 shadow-2xl relative overflow-hidden">
+    <div className="min-h-screen bg-slate-100 dark:bg-slate-950 flex flex-col justify-center items-center p-4 relative">
+      <div className="absolute top-4 right-4">
+        <ThemeToggle />
+      </div>
+      <div className="max-w-md w-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl p-8 shadow-2xl relative overflow-hidden">
         <div
           className="absolute top-0 left-0 right-0 h-1.5"
           style={{ backgroundColor: restaurant?.primary_color || '#e11d48' }}

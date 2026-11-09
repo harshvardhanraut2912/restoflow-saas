@@ -17,6 +17,7 @@ import {
 import { waiterApi, publicApi } from '../../services/api.js';
 import { useStaffAuth } from '../../context/StaffAuthContext.js';
 import { useTenant } from '../../context/TenantContext.js';
+import { ThemeToggle } from '../../components/ThemeToggle.js';
 
 export const WaiterFloor: React.FC = () => {
   const { user, logout } = useStaffAuth();
@@ -208,13 +209,16 @@ export const WaiterFloor: React.FC = () => {
           </button>
         </div>
 
-        <button
-          onClick={logout}
-          className="p-2.5 rounded-xl border border-slate-800 text-slate-400 hover:text-white hover:bg-slate-800"
-          title="Sign out"
-        >
-          <LogOut className="w-4 h-4" />
-        </button>
+        <div className="flex items-center gap-2">
+          <ThemeToggle />
+          <button
+            onClick={logout}
+            className="p-2.5 rounded-xl border border-slate-700 dark:border-slate-800 text-slate-400 hover:text-white hover:bg-slate-800"
+            title="Sign out"
+          >
+            <LogOut className="w-4 h-4" />
+          </button>
+        </div>
       </header>
 
       {/* Main Floor Area */}
