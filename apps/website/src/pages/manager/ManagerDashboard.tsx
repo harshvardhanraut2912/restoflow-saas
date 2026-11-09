@@ -24,6 +24,7 @@ import { managerApi, publicApi, ApiError } from '../../services/api.js';
 import { useStaffAuth } from '../../context/StaffAuthContext.js';
 import { useTenant } from '../../context/TenantContext.js';
 import { ThemeToggle } from '../../components/ThemeToggle.js';
+import { ReceiptModal, ReceiptData } from '../../components/ReceiptModal.js';
 
 export const ManagerDashboard: React.FC = () => {
   const navigate = useNavigate();
@@ -62,6 +63,7 @@ export const ManagerDashboard: React.FC = () => {
   const [newTableNum, setNewTableNum] = useState('');
   const [newTableCap, setNewTableCap] = useState('4');
   const [activeQrModal, setActiveQrModal] = useState<any>(null);
+  const [activeReceipt, setActiveReceipt] = useState<ReceiptData | null>(null);
 
   // Staff State
   const [staffList, setStaffList] = useState<any[]>([]);
@@ -265,6 +267,21 @@ export const ManagerDashboard: React.FC = () => {
         alert(err.message || 'Failed to create item.');
       }
     }
+  };
+
+  const handleOpenReceipt = (o: any) => {
+    setActiveReceipt({
+      orderNumber: o.order_number,
+      roundNumber: o.round_number,
+      tableNumber: o.table_number,
+      orderType: o.order_type,
+      createdAt: o.created_at,
+      subtotal_paise: o.subtotal_paise || 0,
+      tax_paise: Math.round((o.subtotal_paise || 0) * 0.05),
+      grand_total_paise: Math.round((o.subtotal_paise || 0) * 1.05),
+      paymentMethod: o.bill_status === 'paid' ? 'Paid' : 'Settled',
+      items: o.items || []
+    });
   };
 
   const handleToggleAvailability = async (id: string, current: boolean) => {
@@ -480,6 +497,7 @@ export const ManagerDashboard: React.FC = () => {
                       <th className="py-3 px-4">Customer Phone</th>
                       <th className="py-3 px-4">Subtotal</th>
                       <th className="py-3 px-4">Status</th>
+                      <th className="py-3 px-4 text-right">Action</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
@@ -493,6 +511,16 @@ export const ManagerDashboard: React.FC = () => {
                           <span className="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase bg-rose-500/10 text-rose-600 dark:text-rose-400 border border-rose-500/20">
                             {o.status}
                           </span>
+                        </td>
+                        <td className="py-3 px-4 text-right">
+                          <button
+                            onClick={() => handleOpenReceipt(o)}
+                            className="px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 font-semibold text-[11px] inline-flex items-center gap-1 transition-colors"
+                            title="Print / View Receipt"
+                          >
+                            <Printer className="w-3.5 h-3.5 text-rose-500" />
+                            Receipt
+                          </button>
                         </td>
                       </tr>
                     ))}
@@ -1138,6 +1166,13 @@ export const ManagerDashboard: React.FC = () => {
           </div>
         </div>
       )}
+
+      {/* MODAL: BROWSER RECEIPT MAKER / PRINT */}
+      <ReceiptModal
+        isOpen={!!activeReceipt}
+        onClose={() => setActiveReceipt(null)}
+        receipt={activeReceipt}
+      />
     </div>
   );
 };

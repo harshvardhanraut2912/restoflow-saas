@@ -13,12 +13,14 @@ import {
   LogOut,
   CreditCard,
   QrCode,
+  Printer,
   X
 } from 'lucide-react';
 import { waiterApi, publicApi, ApiError } from '../../services/api.js';
 import { useStaffAuth } from '../../context/StaffAuthContext.js';
 import { useTenant } from '../../context/TenantContext.js';
 import { ThemeToggle } from '../../components/ThemeToggle.js';
+import { ReceiptModal, ReceiptData } from '../../components/ReceiptModal.js';
 
 export const WaiterFloor: React.FC = () => {
   const { user, logout } = useStaffAuth();
@@ -30,6 +32,7 @@ export const WaiterFloor: React.FC = () => {
   const [activeOrders, setActiveOrders] = useState<any[]>([]);
   const [serviceRequests, setServiceRequests] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [activeReceipt, setActiveReceipt] = useState<ReceiptData | null>(null);
 
   // Orders in 'ready' status awaiting waiter delivery
   const readyOrders = activeOrders.filter((o) => o.status === 'ready');
@@ -173,6 +176,21 @@ export const WaiterFloor: React.FC = () => {
     }
   };
 
+  const handleOpenOrderReceipt = (o: any) => {
+    setActiveReceipt({
+      orderNumber: o.order_number,
+      roundNumber: o.round_number,
+      tableNumber: o.table_number,
+      orderType: o.order_type,
+      createdAt: o.created_at,
+      subtotal_paise: o.subtotal_paise || 0,
+      tax_paise: Math.round((o.subtotal_paise || 0) * 0.05),
+      grand_total_paise: Math.round((o.subtotal_paise || 0) * 1.05),
+      paymentMethod: o.bill_status === 'paid' ? 'Paid' : 'Settled',
+      items: o.items || []
+    });
+  };
+
   const handleSettleBill = async () => {
     if (!selectedTable?.active_session_id || !sessionBill) return;
     setIsProcessingPayment(true);
@@ -187,10 +205,26 @@ export const WaiterFloor: React.FC = () => {
         amount_paise: billRes.bill.grand_total_paise,
         method: paymentMethod
       });
+
+      const currentBill = sessionBill;
+      const currentTable = selectedTable;
       setIsSettlingBill(false);
       setSelectedTable(null);
       loadData();
-      alert(`Payment marked 'Paid' successfully via ${paymentMethod.toUpperCase()}! Order is completed and table is settled.`);
+
+      // Auto-open print receipt dialog
+      setActiveReceipt({
+        orderNumber: `Table ${currentTable.table_number}`,
+        tableNumber: currentTable.table_number,
+        orderType: 'dine_in',
+        createdAt: new Date().toISOString(),
+        items: currentBill?.items || [],
+        subtotal_paise: currentBill?.subtotal_paise || 0,
+        tax_paise: currentBill?.tax_paise,
+        grand_total_paise: currentBill?.grand_total_paise,
+        paymentMethod: paymentMethod,
+        invoiceNumber: billRes.bill?.bill_number
+      });
     } catch (err: any) {
       alert(err.message || 'Payment settlement failed.');
     } finally {
@@ -472,11 +506,21 @@ export const WaiterFloor: React.FC = () => {
                     <div className="text-slate-500 dark:text-slate-400">Customer: {o.customer_name || o.customer_phone_snapshot}</div>
                   </div>
 
-                  <div className="text-right space-y-1">
+                  <div className="text-right space-y-1.5 flex flex-col items-end">
                     <div className="font-bold text-slate-900 dark:text-white text-sm">₹{(o.subtotal_paise / 100).toFixed(0)}</div>
-                    <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider bg-rose-500/10 text-rose-500 dark:text-rose-400 border border-rose-500/20">
-                      {o.status}
-                    </span>
+                    <div className="flex items-center gap-1.5">
+                      <span className="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider bg-rose-500/10 text-rose-500 dark:text-rose-400 border border-rose-500/20">
+                        {o.status}
+                      </span>
+                      <button
+                        onClick={() => handleOpenOrderReceipt(o)}
+                        className="px-2 py-0.5 rounded-lg bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 font-semibold text-[10px] flex items-center gap-1 transition-colors"
+                        title="Print / View Receipt"
+                      >
+                        <Printer className="w-3 h-3 text-rose-500" />
+                        Receipt
+                      </button>
+                    </div>
                   </div>
                 </div>
               ))}
@@ -755,6 +799,13 @@ export const WaiterFloor: React.FC = () => {
           </div>
         </div>
       )}
+
+      {/* MODAL: BROWSER RECEIPT MAKER / PRINT */}
+      <ReceiptModal
+        isOpen={!!activeReceipt}
+        onClose={() => setActiveReceipt(null)}
+        receipt={activeReceipt}
+      />
     </div>
   );
 };

@@ -4,6 +4,7 @@ import { ArrowLeft, Receipt, CheckCircle, Bell, RefreshCw, CreditCard } from 'lu
 import { customerApi } from '../../services/api.js';
 import { useCart } from '../../context/CartContext.js';
 import { useTenant } from '../../context/TenantContext.js';
+import { ReceiptModal } from '../../components/ReceiptModal.js';
 
 export const CustomerRunningBill: React.FC = () => {
   const navigate = useNavigate();
@@ -16,6 +17,7 @@ export const CustomerRunningBill: React.FC = () => {
   const [requestSent, setRequestSent] = useState(false);
   const [isPaying, setIsPaying] = useState(false);
   const [receiptToken, setReceiptToken] = useState<string | null>(null);
+  const [isReceiptOpen, setIsReceiptOpen] = useState(false);
 
   const loadBill = () => {
     if (!tableContext.sessionId) {
@@ -137,14 +139,13 @@ export const CustomerRunningBill: React.FC = () => {
                 <div className="text-xs text-emerald-700">Thank you for dining with us!</div>
               </div>
             </div>
-            {receiptToken && (
-              <button
-                onClick={() => navigate(`/u/customer/receipt/${receiptToken}`)}
-                className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs shadow-md shadow-emerald-900/20"
-              >
-                Receipt ↗
-              </button>
-            )}
+            <button
+              onClick={() => setIsReceiptOpen(true)}
+              className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs shadow-md shadow-emerald-900/20 flex items-center gap-1.5"
+            >
+              <Receipt className="w-3.5 h-3.5" />
+              Receipt
+            </button>
           </div>
         )}
 
@@ -236,16 +237,48 @@ export const CustomerRunningBill: React.FC = () => {
             </button>
           </div>
         ) : (
-          <div className="text-center py-4">
+          <div className="space-y-3 pt-2">
+            <button
+              onClick={() => setIsReceiptOpen(true)}
+              className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-3.5 px-6 rounded-2xl text-xs flex items-center justify-center gap-2 shadow-lg shadow-emerald-900/20 transition-all"
+            >
+              <Receipt className="w-4 h-4" />
+              View &amp; Print Paid Receipt
+            </button>
             <button
               onClick={() => navigate('/u/customer/menu')}
-              className="bg-slate-900 text-white font-bold py-3 px-6 rounded-2xl text-xs"
+              className="w-full bg-slate-900 text-white font-bold py-3 px-6 rounded-2xl text-xs"
             >
               Return to Menu
             </button>
           </div>
         )}
       </main>
+
+      {/* BROWSER-SIDE THERMAL RECEIPT MAKER / PRINT */}
+      <ReceiptModal
+        isOpen={isReceiptOpen}
+        onClose={() => setIsReceiptOpen(false)}
+        receipt={
+          billData
+            ? {
+                orderNumber: billRecord?.bill_number || `Table ${tableContext.tableNumber || ''}`,
+                tableNumber: tableContext.tableNumber || billRecord?.table_number,
+                orderType: 'dine_in',
+                createdAt: billRecord?.settled_at || billRecord?.created_at || new Date().toISOString(),
+                items: billData.items || [],
+                subtotal_paise: billData.subtotal_paise || 0,
+                tax_paise: billData.tax_paise,
+                service_charge_paise: billData.service_charge_paise,
+                grand_total_paise: billData.grand_total_paise,
+                paymentMethod: 'Paid / Settle',
+                isOnlinePayment: Boolean(receiptToken),
+                invoiceNumber: billRecord?.bill_number,
+                transactionReference: receiptToken ? `TXN-${receiptToken.substring(0, 8).toUpperCase()}` : undefined
+              }
+            : null
+        }
+      />
     </div>
   );
 };

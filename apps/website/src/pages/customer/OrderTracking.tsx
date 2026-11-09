@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 import { customerApi } from '../../services/api.js';
 import { useTenant } from '../../context/TenantContext.js';
+import { ReceiptModal } from '../../components/ReceiptModal.js';
 
 export const CustomerOrderTracking: React.FC = () => {
   const { orderId } = useParams();
@@ -33,6 +34,7 @@ export const CustomerOrderTracking: React.FC = () => {
   const [waiterCallSuccess, setWaiterCallSuccess] = useState<string | null>(null);
   const [isPayingOnline, setIsPayingOnline] = useState(false);
   const [isProcessingPayment, setIsProcessingPayment] = useState(false);
+  const [isReceiptOpen, setIsReceiptOpen] = useState(false);
 
   const fetchOrder = () => {
     if (!orderId || !token) {
@@ -181,14 +183,13 @@ export const CustomerOrderTracking: React.FC = () => {
                 <div className="text-xs text-emerald-700">Thank you for dining with us!</div>
               </div>
             </div>
-            {order.receipt_token && (
-              <button
-                onClick={() => navigate(`/u/customer/receipt/${order.receipt_token}`)}
-                className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs shadow-md shadow-emerald-900/20"
-              >
-                Receipt ↗
-              </button>
-            )}
+            <button
+              onClick={() => setIsReceiptOpen(true)}
+              className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs shadow-md shadow-emerald-900/20 flex items-center gap-1.5"
+            >
+              <Receipt className="w-3.5 h-3.5" />
+              Receipt
+            </button>
           </div>
         )}
 
@@ -381,6 +382,17 @@ export const CustomerOrderTracking: React.FC = () => {
               View Total Running Table Bill
             </button>
           )}
+
+          {/* Button 5: View & Print Receipt when bill is paid */}
+          {isOrderPaid && (
+            <button
+              onClick={() => setIsReceiptOpen(true)}
+              className="w-full bg-emerald-600 hover:bg-emerald-500 active:scale-98 text-white font-black py-4 rounded-2xl text-xs flex items-center justify-center gap-2 shadow-lg shadow-emerald-900/20 transition-all"
+            >
+              <Receipt className="w-4 h-4" />
+              View &amp; Print Paid Receipt
+            </button>
+          )}
         </div>
       </main>
 
@@ -434,6 +446,30 @@ export const CustomerOrderTracking: React.FC = () => {
           </div>
         </div>
       )}
+
+      {/* BROWSER-SIDE THERMAL RECEIPT MAKER / PRINT */}
+      <ReceiptModal
+        isOpen={isReceiptOpen}
+        onClose={() => setIsReceiptOpen(false)}
+        receipt={
+          order
+            ? {
+                orderNumber: order.order_number,
+                roundNumber: order.round_number,
+                tableNumber: order.table_number,
+                orderType: order.order_type || 'dine_in',
+                createdAt: order.created_at,
+                items: order.items || [],
+                subtotal_paise: order.subtotal_paise || 0,
+                tax_paise: Math.round((order.subtotal_paise || 0) * 0.05),
+                grand_total_paise: Math.round((order.subtotal_paise || 0) * 1.05),
+                paymentMethod: isOrderPaid ? (order.payment_method || 'Online / Cash') : 'Pending',
+                isOnlinePayment: Boolean(order.payment_method?.includes('online') || order.receipt_token),
+                transactionReference: order.receipt_token ? `TXN-${order.receipt_token.substring(0, 8).toUpperCase()}` : undefined
+              }
+            : null
+        }
+      />
     </div>
   );
 };
