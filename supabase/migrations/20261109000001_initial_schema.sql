@@ -222,7 +222,7 @@ CREATE TABLE IF NOT EXISTS kitchen_tickets (
     restaurant_id UUID NOT NULL REFERENCES restaurants(id) ON DELETE CASCADE,
     order_id UUID NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
     ticket_number TEXT NOT NULL,
-    status TEXT NOT NULL DEFAULT 'new' CHECK (status IN ('new', 'acknowledged', 'preparing', 'ready')),
+    status TEXT NOT NULL DEFAULT 'new' CHECK (status IN ('new', 'acknowledged', 'preparing', 'ready', 'cancelled')),
     acknowledged_at TIMESTAMPTZ,
     ready_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ DEFAULT now()
