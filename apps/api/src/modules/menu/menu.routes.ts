@@ -1,8 +1,9 @@
 import { Router, Request, Response } from 'express';
 import { z } from 'zod';
+import crypto from 'crypto';
 import { resolveTenant } from '../../middleware/tenant.js';
 import { requireStaff } from '../../middleware/auth.js';
-import { query, withTransaction } from '../../db/index.js';
+import { query, withTransaction, supabase } from '../../db/index.js';
 
 export const menuRouter = Router();
 
@@ -312,5 +313,72 @@ menuRouter.delete('/items/:id', resolveTenant, requireStaff(['manager']), async 
   } catch (err: any) {
     console.error('Delete item error:', err);
     res.status(500).json({ error: 'SERVER_ERROR', message: 'Failed to delete menu item.' });
+  }
+});
+
+// 5. Upload Item Image to Supabase Storage Bucket
+const uploadImageSchema = z.object({
+  base64Data: z.string().min(1, 'Image data is required'),
+  fileName: z.string().optional().default('dish.jpg'),
+  contentType: z.string().regex(/^image\/(jpeg|jpg|png|webp|gif)$/, 'Supported formats: JPEG, PNG, WEBP, GIF')
+});
+
+menuRouter.post('/items/upload-image', resolveTenant, requireStaff(['manager']), async (req: Request, res: Response) => {
+  const restaurant = req.restaurant!;
+  const parsed = uploadImageSchema.safeParse(req.body);
+
+  if (!parsed.success) {
+    res.status(400).json({ error: 'VALIDATION_ERROR', details: parsed.error.format() });
+    return;
+  }
+
+  const { base64Data, fileName, contentType } = parsed.data;
+
+  try {
+    // Strip optional data URI prefix if present (e.g., data:image/png;base64,...)
+    const cleanBase64 = base64Data.includes(',') ? base64Data.split(',')[1] : base64Data;
+    const buffer = Buffer.from(cleanBase64, 'base64');
+
+    if (buffer.length > 5 * 1024 * 1024) {
+      res.status(400).json({ error: 'FILE_TOO_LARGE', message: 'Image size cannot exceed 5MB.' });
+      return;
+    }
+
+    // Determine extension
+    const ext = contentType.split('/')[1]?.replace('jpeg', 'jpg') || 'jpg';
+    const uniqueId = crypto.randomBytes(8).toString('hex');
+    const safeBaseName = (fileName || 'dish')
+      .replace(/[^a-zA-Z0-9_-]/g, '_')
+      .replace(/\.[^/.]+$/, '')
+      .substring(0, 30);
+    const storagePath = `${restaurant.slug || restaurant.id}/${Date.now()}_${safeBaseName}_${uniqueId}.${ext}`;
+
+    // Upload to Supabase Storage "menu-items" bucket
+    const { data: uploadData, error: uploadError } = await supabase.storage
+      .from('menu-items')
+      .upload(storagePath, buffer, {
+        contentType,
+        upsert: true
+      });
+
+    if (uploadError) {
+      console.error('Supabase storage upload error:', uploadError);
+      res.status(500).json({ error: 'UPLOAD_FAILED', message: uploadError.message || 'Failed to upload image to storage.' });
+      return;
+    }
+
+    // Get public URL
+    const { data: publicUrlData } = supabase.storage
+      .from('menu-items')
+      .getPublicUrl(storagePath);
+
+    res.json({
+      success: true,
+      url: publicUrlData.publicUrl,
+      path: uploadData.path
+    });
+  } catch (err: any) {
+    console.error('Upload processing error:', err);
+    res.status(500).json({ error: 'SERVER_ERROR', message: err.message || 'Image upload failed.' });
   }
 });

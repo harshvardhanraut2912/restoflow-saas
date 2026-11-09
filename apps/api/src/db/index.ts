@@ -61,4 +61,7 @@ export async function withTransaction<T>(callback: (client: pg.PoolClient) => Pr
 }
 
 // Supabase JS Client for Realtime / Storage
-export const supabase = createClient(env.SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY || env.SUPABASE_ANON_KEY);
+export const supabase = createClient(env.SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY || env.SUPABASE_ANON_KEY, {
+  auth: { persistSession: false },
+  realtime: { transport: WebSocket as any }
+});

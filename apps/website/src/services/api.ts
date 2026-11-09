@@ -175,6 +175,11 @@ export const managerApi = {
     apiRequest(`/menu/categories/${id}`, { method: 'DELETE' }),
   createItem: (itemData: any) =>
     apiRequest('/menu/items', { method: 'POST', body: JSON.stringify(itemData) }),
+  uploadItemImage: (data: { base64Data: string; fileName?: string; contentType: string }) =>
+    apiRequest<{ success: boolean; url: string; path: string }>('/menu/items/upload-image', {
+      method: 'POST',
+      body: JSON.stringify(data)
+    }),
   toggleItemAvailability: (id: string, is_available: boolean) =>
     apiRequest(`/menu/items/${id}/availability`, { method: 'PATCH', body: JSON.stringify({ is_available }) }),
   deleteItem: (id: string) =>
