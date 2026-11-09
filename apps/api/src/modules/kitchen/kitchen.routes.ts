@@ -22,7 +22,17 @@ kitchenRouter.get('/tickets', resolveTenant, requireStaff(['kitchen', 'manager',
         o.order_number,
         o.order_type,
         o.notes as order_notes,
-        dt.table_number
+        dt.table_number,
+        (
+          CASE WHEN o.table_session_id IS NOT NULL THEN (
+            SELECT COUNT(*) + 1 
+            FROM orders prev 
+            WHERE prev.table_session_id = o.table_session_id 
+              AND prev.restaurant_id = o.restaurant_id 
+              AND prev.status NOT IN ('cancelled', 'rejected') 
+              AND prev.created_at < o.created_at
+          ) ELSE 1 END
+        ) as round_number
        FROM kitchen_tickets kt
        JOIN orders o ON o.id = kt.order_id
        LEFT JOIN dining_tables dt ON dt.id = o.table_id

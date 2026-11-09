@@ -160,17 +160,35 @@ tablesRouter.patch('/:id/status', resolveTenant, requireStaff(['manager', 'waite
   }
 
   try {
-    const result = await query(
-      `UPDATE dining_tables SET status = $1 WHERE id = $2 AND restaurant_id = $3 RETURNING *`,
-      [status, id, restaurant.id]
-    );
+    const updatedTable = await withTransaction(async (client) => {
+      const result = await client.query(
+        `UPDATE dining_tables SET status = $1 WHERE id = $2 AND restaurant_id = $3 RETURNING *`,
+        [status, id, restaurant.id]
+      );
 
-    if (result.rows.length === 0) {
+      if (result.rows.length === 0) {
+        return null;
+      }
+
+      // If clearing/setting table to available, close any open table sessions
+      if (status === 'available') {
+        await client.query(
+          `UPDATE table_sessions 
+           SET status = 'closed', closed_at = now() 
+           WHERE table_id = $1 AND restaurant_id = $2 AND status != 'closed'`,
+          [id, restaurant.id]
+        );
+      }
+
+      return result.rows[0];
+    });
+
+    if (!updatedTable) {
       res.status(404).json({ error: 'NOT_FOUND', message: 'Table not found.' });
       return;
     }
 
-    res.json({ table: result.rows[0] });
+    res.json({ table: updatedTable });
   } catch (err: any) {
     console.error('Update table status error:', err);
     res.status(500).json({ error: 'SERVER_ERROR', message: 'Failed to update table status.' });

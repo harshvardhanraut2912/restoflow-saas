@@ -147,7 +147,9 @@ export const CustomerOrderTracking: React.FC = () => {
           </button>
           <div className="text-center">
             <h1 className="font-bold text-sm">Order Status</h1>
-            <div className="text-[10px] text-slate-400">Order {order.order_number}</div>
+            <div className="text-[10px] text-slate-400">
+              {order.round_number ? `Order ${order.round_number} (${order.order_number})` : `Order ${order.order_number}`}
+            </div>
           </div>
           <button
             onClick={fetchOrder}
@@ -196,6 +198,7 @@ export const CustomerOrderTracking: React.FC = () => {
             <div>
               <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
                 {order.order_type === 'dine_in' ? `Table ${order.table_number || ''}` : 'Takeaway Order'}
+                {order.round_number ? ` • Order ${order.round_number}` : ''}
               </span>
               <div className="text-2xl font-black text-slate-900">
                 {order.order_number}
@@ -203,11 +206,16 @@ export const CustomerOrderTracking: React.FC = () => {
             </div>
             <div className="text-right">
               <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
-                {isOrderPaid ? 'Status' : 'Amount'}
+                {isOrderPaid ? 'Status' : order.session_subtotal_paise ? 'Total Table Amount' : 'Amount'}
               </span>
               <div className={`text-lg font-black ${isOrderPaid ? 'text-emerald-600' : 'text-rose-600'}`}>
-                {isOrderPaid ? 'PAID' : `₹${(order.subtotal_paise / 100).toFixed(0)}`}
+                {isOrderPaid ? 'PAID' : `₹${((order.session_subtotal_paise || order.subtotal_paise) / 100).toFixed(0)}`}
               </div>
+              {!isOrderPaid && order.session_subtotal_paise && order.session_subtotal_paise !== order.subtotal_paise && (
+                <div className="text-[10px] text-slate-400 font-medium">
+                  This Batch: ₹{(order.subtotal_paise / 100).toFixed(0)}
+                </div>
+              )}
             </div>
           </div>
 
@@ -257,8 +265,9 @@ export const CustomerOrderTracking: React.FC = () => {
 
         {/* Ordered Items Breakdown */}
         <div className="bg-white border border-slate-200 rounded-3xl p-5 space-y-3 shadow-sm">
-          <div className="text-xs font-bold uppercase tracking-wider text-slate-400 pb-2 border-b border-slate-100">
-            Ordered Dishes ({order.items?.length || 0})
+          <div className="text-xs font-bold uppercase tracking-wider text-slate-400 pb-2 border-b border-slate-100 flex items-center justify-between">
+            <span>Dishes in Order {order.round_number || 1} ({order.items?.length || 0})</span>
+            <span className="font-mono text-slate-700">₹{(order.subtotal_paise / 100).toFixed(0)}</span>
           </div>
 
           <div className="divide-y divide-slate-100">
@@ -282,6 +291,53 @@ export const CustomerOrderTracking: React.FC = () => {
             ))}
           </div>
         </div>
+
+        {/* Multi-Order Table Summary (when user places Order 1, Order 2, etc.) */}
+        {order.session_orders && order.session_orders.length > 1 && (
+          <div className="bg-white border border-slate-200 rounded-3xl p-5 space-y-3 shadow-sm">
+            <div className="flex items-center justify-between pb-2 border-b border-slate-100">
+              <span className="text-xs font-bold uppercase tracking-wider text-slate-500">
+                All Orders on Table {order.table_number || ''} ({order.session_orders.length})
+              </span>
+              <span className="text-xs font-black text-rose-600">
+                Total: ₹{((order.session_subtotal_paise || order.subtotal_paise) / 100).toFixed(0)}
+              </span>
+            </div>
+
+            <div className="space-y-2.5">
+              {order.session_orders.map((so: any) => {
+                const isCurrent = so.id === order.id;
+                return (
+                  <div
+                    key={so.id}
+                    className={`p-3 rounded-2xl border transition-all ${
+                      isCurrent
+                        ? 'bg-rose-50/60 border-rose-300'
+                        : 'bg-slate-50 border-slate-200/80'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between text-xs font-bold mb-1">
+                      <span className="text-slate-900 flex items-center gap-1.5">
+                        <span className="text-rose-600 font-extrabold">Order {so.round_number || 1}</span>
+                        <span className="text-slate-400 font-normal">({so.order_number})</span>
+                        {isCurrent && (
+                          <span className="px-1.5 py-0.5 rounded text-[9px] bg-rose-600 text-white font-bold">This Order</span>
+                        )}
+                      </span>
+                      <span className="text-slate-900 font-black">₹{(so.subtotal_paise / 100).toFixed(0)}</span>
+                    </div>
+                    <div className="text-[11px] text-slate-500 line-clamp-1">
+                      {so.items?.map((it: any) => `${it.quantity}x ${it.name}`).join(', ')}
+                    </div>
+                    <div className="mt-1 flex items-center justify-between text-[10px]">
+                      <span className="text-slate-400 uppercase font-semibold">Status: <span className="text-slate-700 font-bold">{so.status}</span></span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
 
         {/* Action Controls */}
         <div className="space-y-3">
@@ -346,10 +402,15 @@ export const CustomerOrderTracking: React.FC = () => {
             </div>
 
             <div className="p-4 rounded-2xl bg-slate-50 border border-slate-100 mb-5 text-center">
-              <span className="text-xs text-slate-500">Total Payable Amount</span>
+              <span className="text-xs text-slate-500">Total Table Payable Amount</span>
               <div className="text-2xl font-black text-rose-600 mt-0.5">
-                ₹{(order.subtotal_paise / 100).toFixed(2)}
+                ₹{(((order.session_subtotal_paise || order.subtotal_paise)) / 100).toFixed(2)}
               </div>
+              {order.session_subtotal_paise && order.session_subtotal_paise !== order.subtotal_paise && (
+                <div className="text-[11px] text-slate-500 mt-1">
+                  Settles all orders on Table {order.table_number}
+                </div>
+              )}
             </div>
 
             <div className="space-y-3 mb-6">

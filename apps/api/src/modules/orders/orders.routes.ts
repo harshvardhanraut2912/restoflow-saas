@@ -377,13 +377,81 @@ ordersRouter.get('/customer/:id', resolveTenant, async (req: Request, res: Respo
     const bill = billRes.rows[0] || null;
     const isPaid = bill?.status === 'paid' || order.status === 'completed';
 
+    // Session order sequence & cumulative total calculation for multi-round dining
+    let roundNumber = 1;
+    let sessionSubtotalPaise = order.subtotal_paise;
+    let sessionOrders: any[] = [];
+
+    if (order.table_session_id) {
+      const sessionStatsRes = await query(
+        `SELECT 
+          COALESCE(SUM(subtotal_paise), 0) as session_subtotal_paise,
+          COUNT(id) as total_session_orders
+         FROM orders 
+         WHERE table_session_id = $1 AND restaurant_id = $2 AND status NOT IN ('cancelled', 'rejected')`,
+        [order.table_session_id, restaurant.id]
+      );
+
+      if (sessionStatsRes.rows.length > 0) {
+        sessionSubtotalPaise = parseInt(sessionStatsRes.rows[0].session_subtotal_paise, 10);
+      }
+
+      const roundRes = await query(
+        `SELECT COUNT(*) + 1 as round_number
+         FROM orders 
+         WHERE table_session_id = $1 AND restaurant_id = $2 AND status NOT IN ('cancelled', 'rejected') AND created_at < $3`,
+        [order.table_session_id, restaurant.id, order.created_at]
+      );
+
+      if (roundRes.rows.length > 0) {
+        roundNumber = parseInt(roundRes.rows[0].round_number, 10);
+      }
+
+      const allSessionOrdersRes = await query(
+        `SELECT 
+          so.id,
+          so.order_number,
+          so.status,
+          so.subtotal_paise,
+          so.created_at,
+          (
+            SELECT COUNT(*) + 1 
+            FROM orders prev 
+            WHERE prev.table_session_id = so.table_session_id 
+              AND prev.restaurant_id = so.restaurant_id 
+              AND prev.status NOT IN ('cancelled', 'rejected') 
+              AND prev.created_at < so.created_at
+          ) as round_number,
+          COALESCE(
+            (
+              SELECT json_agg(json_build_object(
+                'name', oi.name_snapshot,
+                'quantity', oi.quantity,
+                'unit_price_paise', oi.unit_price_paise,
+                'total_price_paise', oi.total_price_paise,
+                'variant_name', oi.variant_name_snapshot
+              ))
+              FROM order_items oi WHERE oi.order_id = so.id
+            ), '[]'::json
+          ) as items
+         FROM orders so
+         WHERE so.table_session_id = $1 AND so.restaurant_id = $2 AND so.status NOT IN ('cancelled', 'rejected')
+         ORDER BY so.created_at ASC`,
+        [order.table_session_id, restaurant.id]
+      );
+      sessionOrders = allSessionOrdersRes.rows;
+    }
+
     res.json({
       order: {
         ...order,
         items: itemsRes.rows,
         bill,
         is_paid: isPaid,
-        receipt_token: bill?.receipt_token_hash || null
+        receipt_token: bill?.receipt_token_hash || null,
+        round_number: roundNumber,
+        session_subtotal_paise: sessionSubtotalPaise,
+        session_orders: sessionOrders
       }
     });
   } catch (err: any) {
@@ -400,6 +468,16 @@ ordersRouter.get('/staff/list', resolveTenant, requireStaff(['manager', 'waiter'
   try {
     let sql = `
       SELECT o.*, dt.table_number, c.name as customer_name,
+        (
+          CASE WHEN o.table_session_id IS NOT NULL THEN (
+            SELECT COUNT(*) + 1 
+            FROM orders prev 
+            WHERE prev.table_session_id = o.table_session_id 
+              AND prev.restaurant_id = o.restaurant_id 
+              AND prev.status NOT IN ('cancelled', 'rejected') 
+              AND prev.created_at < o.created_at
+          ) ELSE 1 END
+        ) as round_number,
         (SELECT COUNT(*) FROM order_items WHERE order_id = o.id) as item_count,
         COALESCE(
           (SELECT json_agg(json_build_object(

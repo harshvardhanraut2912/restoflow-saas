@@ -174,12 +174,14 @@ export const KitchenKDS: React.FC = () => {
                           ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border border-emerald-500/20'
                           : 'bg-amber-500/10 text-amber-700 dark:text-amber-400 border border-amber-500/20'
                       }`}>
-                        {t.order_type === 'dine_in' ? `Table ${t.table_number || ''}` : 'Takeaway'}
+                        {t.order_type === 'dine_in' ? `Table ${t.table_number || ''}${t.round_number ? ` • Order ${t.round_number}` : ''}` : 'Takeaway'}
                       </span>
                     </div>
 
                     <div className="flex items-center justify-between text-xs text-slate-500 dark:text-slate-400 mt-2">
-                      <span className="font-semibold text-slate-700 dark:text-slate-300">Order {t.order_number}</span>
+                      <span className="font-semibold text-slate-700 dark:text-slate-300">
+                        Order {t.order_number} {t.round_number ? `(Round ${t.round_number})` : ''}
+                      </span>
                       <span className="flex items-center gap-1 font-mono">
                         <Clock className="w-3.5 h-3.5" />
                         {getElapsedTime(t.created_at)}
