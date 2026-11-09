@@ -537,10 +537,12 @@ billingRouter.get('/public/receipt/:receiptToken', resolveTenant, async (req: Re
     const tokenHash = crypto.createHash('sha256').update(receiptToken).digest('hex');
 
     const billRes = await query(
-      `SELECT b.*, dt.table_number 
+      `SELECT b.*, COALESCE(dt.table_number, dto.table_number) as table_number 
        FROM bills b
        LEFT JOIN table_sessions ts ON ts.id = b.table_session_id
        LEFT JOIN dining_tables dt ON dt.id = ts.table_id
+       LEFT JOIN orders o ON o.id = b.order_id
+       LEFT JOIN dining_tables dto ON dto.id = o.table_id
        WHERE b.receipt_token_hash = $1 AND b.restaurant_id = $2`,
       [tokenHash, restaurant.id]
     );

@@ -133,7 +133,11 @@ restaurantRouter.get('/qr/resolve', async (req: Request, res: Response) => {
         }
       }
 
-      // Query dining_tables matching table number or formatted table number (e.g. 1 -> T-01)
+      // Extract numeric digits for distinct numeric table matching (e.g. 1 -> 1, 10 -> 10, prevents 1 vs 10 overlap)
+      const rawDigits = token.replace(/\D/g, '');
+      const tableNumInt = rawDigits ? parseInt(rawDigits, 10) : null;
+
+      // Query dining_tables matching exact table number or formatted table number
       const tableQuery = `
         SELECT 
           dt.id as table_id, 
@@ -152,15 +156,13 @@ restaurantRouter.get('/qr/resolve', async (req: Request, res: Response) => {
         WHERE (r.slug = $1 OR r.primary_domain = $2 OR ($1 IS NULL AND r.status != 'deleted'))
           AND (
             LOWER(dt.table_number) = LOWER($3)
-            OR LOWER(dt.table_number) = LOWER('T-' || LPAD($3, 2, '0'))
-            OR LOWER(dt.table_number) = LOWER('T-' || $3)
-            OR LOWER(dt.table_number) = LOWER('Table ' || $3)
+            OR ($4::integer IS NOT NULL AND (regexp_replace(dt.table_number, '[^0-9]', '', 'g'))::integer = $4::integer)
             OR dt.id::text = $3
           )
         ORDER BY CASE WHEN r.slug = 'royalspice' THEN 0 ELSE 1 END, r.created_at ASC
         LIMIT 1
       `;
-      const tableResult = await query(tableQuery, [tenantSlug || null, hostClean, token.trim()]);
+      const tableResult = await query(tableQuery, [tenantSlug || null, hostClean, token.trim(), tableNumInt]);
       if (tableResult.rows.length > 0) {
         qr = tableResult.rows[0];
       }

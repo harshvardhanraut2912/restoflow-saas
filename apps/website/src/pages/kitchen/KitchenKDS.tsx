@@ -188,7 +188,7 @@ export const KitchenKDS: React.FC = () => {
                           ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border border-emerald-500/20'
                           : 'bg-amber-500/10 text-amber-700 dark:text-amber-400 border border-amber-500/20'
                       }`}>
-                        {t.order_type === 'dine_in' ? `Table ${t.table_number || ''}${t.round_number ? ` • Order ${t.round_number}` : ''}` : 'Takeaway'}
+                        {t.order_type === 'dine_in' ? `Table ${t.table_number ? String(t.table_number).replace(/^T-0?/, '') : ''}${t.round_number ? ` • Order ${t.round_number}` : ''}` : 'Takeaway'}
                       </span>
                     </div>
 

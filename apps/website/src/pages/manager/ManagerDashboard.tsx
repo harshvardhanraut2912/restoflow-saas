@@ -504,7 +504,7 @@ export const ManagerDashboard: React.FC = () => {
                     {orders.slice(0, 10).map((o) => (
                       <tr key={o.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/40">
                         <td className="py-3 px-4 font-bold text-slate-900 dark:text-white">{o.order_number}</td>
-                        <td className="py-3 px-4 text-slate-600 dark:text-slate-300">{o.order_type === 'dine_in' ? `Table ${o.table_number}` : 'Takeaway'}</td>
+                        <td className="py-3 px-4 text-slate-600 dark:text-slate-300">{o.order_type === 'dine_in' ? `Table ${o.table_number ? String(o.table_number).replace(/^T-0?/, '') : ''}` : 'Takeaway'}</td>
                         <td className="py-3 px-4 font-mono text-slate-500 dark:text-slate-400">{o.customer_phone_snapshot}</td>
                         <td className="py-3 px-4 font-bold text-slate-900 dark:text-white">₹{(o.subtotal_paise / 100).toFixed(0)}</td>
                         <td className="py-3 px-4">
@@ -667,7 +667,7 @@ export const ManagerDashboard: React.FC = () => {
               {tables.map((t) => (
                 <div key={t.id} className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl p-5 flex flex-col justify-between space-y-4 shadow-sm">
                   <div className="flex items-center justify-between">
-                    <span className="text-lg font-black text-slate-900 dark:text-white">Table {t.table_number}</span>
+                    <span className="text-lg font-black text-slate-900 dark:text-white">Table {t.table_number ? String(t.table_number).replace(/^T-0?/, '') : ''}</span>
                     <span className="text-xs text-slate-500 dark:text-slate-400">{t.capacity} Guests</span>
                   </div>
 

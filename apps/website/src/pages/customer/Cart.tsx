@@ -56,12 +56,16 @@ export const CustomerCart: React.FC = () => {
   // If tableNumber was already set from QR scan, sync tableId automatically
   useEffect(() => {
     if (tables.length > 0 && tableContext.tableNumber && !tableContext.tableId) {
-      const match = tables.find(
-        (t) =>
-          t.table_number === tableContext.tableNumber ||
-          t.table_number === `T-${String(tableContext.tableNumber).padStart(2, '0')}` ||
-          `T-${String(t.table_number).padStart(2, '0')}` === tableContext.tableNumber
-      );
+      const targetDigits = (tableContext.tableNumber || '').replace(/\D/g, '');
+      const targetNum = targetDigits ? parseInt(targetDigits, 10) : null;
+
+      const match = tables.find((t) => {
+        if (t.table_number === tableContext.tableNumber) return true;
+        const tDigits = (t.table_number || '').replace(/\D/g, '');
+        const tNum = tDigits ? parseInt(tDigits, 10) : null;
+        if (targetNum !== null && tNum !== null && targetNum === tNum) return true;
+        return false;
+      });
       if (match) {
         setTableContext({
           tableId: match.id,
@@ -242,12 +246,15 @@ export const CustomerCart: React.FC = () => {
             ) : (
               <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-2.5">
                 {tables.map((t) => {
-                  const rawCtx = (tableContext.tableNumber || '').replace(/\D/g, '');
-                  const rawT = (t.table_number || '').replace(/\D/g, '');
+                  const ctxDigits = (tableContext.tableNumber || '').replace(/\D/g, '');
+                  const ctxNum = ctxDigits ? parseInt(ctxDigits, 10) : null;
+                  const tDigits = (t.table_number || '').replace(/\D/g, '');
+                  const tNum = tDigits ? parseInt(tDigits, 10) : null;
+
                   const isSelected =
                     tableContext.tableId === t.id ||
-                    tableContext.tableNumber === t.table_number ||
-                    (rawCtx && rawT && rawCtx === rawT);
+                    (ctxNum !== null && tNum !== null && ctxNum === tNum) ||
+                    tableContext.tableNumber === t.table_number;
                   const isOccupied = t.status === 'occupied' && !isSelected;
 
                   return (
@@ -277,7 +284,9 @@ export const CustomerCart: React.FC = () => {
                               : 'text-slate-900 dark:text-white'
                           }`}
                         >
-                          {t.table_number.startsWith('T-') ? t.table_number : `Table ${t.table_number}`}
+                          {t.table_number.startsWith('T-')
+                            ? `Table ${parseInt(t.table_number.replace(/\D/g, ''), 10)}`
+                            : `Table ${t.table_number}`}
                         </span>
                       </div>
 

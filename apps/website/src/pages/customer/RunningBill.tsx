@@ -121,7 +121,7 @@ export const CustomerRunningBill: React.FC = () => {
             Menu
           </button>
           <div className="text-center">
-            <h1 className="font-bold text-sm">Table {tableContext.tableNumber} Bill</h1>
+            <h1 className="font-bold text-sm">Table {tableContext.tableNumber ? String(tableContext.tableNumber).replace(/^T-0?/, '') : ''} Bill</h1>
             <div className="text-[10px] text-slate-400">Live Session Total</div>
           </div>
           <div className="w-8"></div>

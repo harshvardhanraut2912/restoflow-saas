@@ -198,7 +198,7 @@ export const CustomerOrderTracking: React.FC = () => {
           <div className="flex items-center justify-between mb-6 pb-4 border-b border-slate-100">
             <div>
               <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
-                {order.order_type === 'dine_in' ? `Table ${order.table_number || ''}` : 'Takeaway Order'}
+                {order.order_type === 'dine_in' ? `Table ${order.table_number ? String(order.table_number).replace(/^T-0?/, '') : ''}` : 'Takeaway Order'}
                 {order.round_number ? ` • Order ${order.round_number}` : ''}
               </span>
               <div className="text-2xl font-black text-slate-900">
@@ -298,7 +298,7 @@ export const CustomerOrderTracking: React.FC = () => {
           <div className="bg-white border border-slate-200 rounded-3xl p-5 space-y-3 shadow-sm">
             <div className="flex items-center justify-between pb-2 border-b border-slate-100">
               <span className="text-xs font-bold uppercase tracking-wider text-slate-500">
-                All Orders on Table {order.table_number || ''} ({order.session_orders.length})
+                All Orders on Table {order.table_number ? String(order.table_number).replace(/^T-0?/, '') : ''} ({order.session_orders.length})
               </span>
               <span className="text-xs font-black text-rose-600">
                 Total: ₹{((order.session_subtotal_paise || order.subtotal_paise) / 100).toFixed(0)}
@@ -420,7 +420,7 @@ export const CustomerOrderTracking: React.FC = () => {
               </div>
               {order.session_subtotal_paise && order.session_subtotal_paise !== order.subtotal_paise && (
                 <div className="text-[11px] text-slate-500 mt-1">
-                  Settles all orders on Table {order.table_number}
+                  Settles all orders on Table {order.table_number ? String(order.table_number).replace(/^T-0?/, '') : ''}
                 </div>
               )}
             </div>

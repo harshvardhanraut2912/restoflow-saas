@@ -133,7 +133,7 @@ export async function addMoreDummyData() {
 
       // Add Tables T-06 to T-10
       for (let i = 6; i <= 10; i++) {
-        const tNum = `T-0${i}`;
+        const tNum = i < 10 ? `T-0${i}` : `T-${i}`;
         const tCheck = await client.query('SELECT id FROM dining_tables WHERE restaurant_id = $1 AND table_number = $2', [r1Id, tNum]);
         if (tCheck.rows.length === 0) {
           const tRes = await client.query(

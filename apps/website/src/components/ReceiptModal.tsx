@@ -199,7 +199,7 @@ export const ReceiptModal: React.FC<ReceiptModalProps> = ({ isOpen, onClose, rec
             <span className="text-slate-400 font-medium block text-[10px] uppercase">Dining Service</span>
             <span className="font-semibold text-slate-800 text-xs">
               {receipt.orderType === 'dine_in'
-                ? `Table ${receipt.tableNumber || '-'}`
+                ? `Table ${receipt.tableNumber ? String(receipt.tableNumber).replace(/^T-0?/, '') : '-'}`
                 : 'Takeaway'}
             </span>
           </div>
