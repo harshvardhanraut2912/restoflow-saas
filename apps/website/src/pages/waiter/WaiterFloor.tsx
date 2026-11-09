@@ -427,7 +427,7 @@ export const WaiterFloor: React.FC = () => {
                 <h2 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
                   Ready to Serve ({readyOrders.length})
                   {readyOrders.length > 0 && (
-                    <span className="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30 animate-pulse">
+                    <span className="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 border border-emerald-500/30">
                       Hot &amp; Prepared
                     </span>
                   )}
@@ -440,17 +440,17 @@ export const WaiterFloor: React.FC = () => {
               <div className="py-20 text-center rounded-3xl bg-slate-50 dark:bg-slate-950/40 border border-slate-200 dark:border-slate-800">
                 <Utensils className="w-12 h-12 text-slate-300 dark:text-slate-600 mx-auto mb-3" />
                 <h3 className="text-sm font-bold text-slate-500 dark:text-slate-300">All Dishes Served</h3>
-                <p className="text-xs text-slate-400 dark:text-slate-500 mt-1">When the kitchen marks orders 'Ready', they will blink in green here.</p>
+                <p className="text-xs text-slate-400 dark:text-slate-500 mt-1">When the kitchen marks orders 'Ready', they will appear in green here.</p>
               </div>
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                 {readyOrders.map((o) => (
                   <div
                     key={o.id}
-                    className="rounded-3xl p-6 bg-white dark:bg-slate-950 border-2 border-emerald-500 shadow-xl shadow-emerald-500/20 flex flex-col justify-between space-y-4 animate-pulse relative overflow-hidden ring-2 ring-emerald-400/50"
+                    className="rounded-3xl p-6 bg-white dark:bg-slate-900 border-2 border-emerald-500/80 dark:border-emerald-500/70 shadow-lg shadow-emerald-500/10 flex flex-col justify-between space-y-4 relative overflow-hidden transition-all"
                   >
-                    {/* Glowing Accent Top Bar */}
-                    <div className="absolute top-0 left-0 right-0 h-1.5 bg-gradient-to-r from-emerald-500 via-emerald-400 to-teal-400"></div>
+                    {/* Glowing Emerald Accent Top Ribbon */}
+                    <div className="absolute top-0 left-0 right-0 h-1.5 bg-gradient-to-r from-emerald-500 via-teal-400 to-emerald-500"></div>
 
                     <div>
                       {/* Table & Order Header */}
@@ -462,9 +462,12 @@ export const WaiterFloor: React.FC = () => {
                           <div className="text-xs text-slate-500 dark:text-slate-400 font-mono mt-0.5">Order #{o.order_number}</div>
                         </div>
 
-                        {/* Blinking Green Badge */}
-                        <div className="px-3 py-1.5 rounded-xl bg-emerald-500/20 border border-emerald-400 text-emerald-700 dark:text-emerald-300 text-xs font-black tracking-wider uppercase flex items-center gap-1.5 shadow-md shadow-emerald-500/30 animate-pulse">
-                          <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-ping"></span>
+                        {/* Solid Green Status Badge with Live Beacon */}
+                        <div className="px-3 py-1.5 rounded-xl bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-500/30 text-emerald-700 dark:text-emerald-400 text-xs font-black tracking-wider uppercase flex items-center gap-2 shadow-sm">
+                          <span className="relative flex h-2 w-2">
+                            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                            <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+                          </span>
                           Ready to Serve
                         </div>
                       </div>
