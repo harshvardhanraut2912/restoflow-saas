@@ -114,7 +114,7 @@ restaurantRouter.get('/qr/resolve', async (req: Request, res: Response) => {
             OR LOWER(dt.table_number) = LOWER('T-' || $3)
             OR LOWER(dt.table_number) = LOWER('Table ' || $3)
           )
-        ORDER BY r.created_at ASC
+        ORDER BY CASE WHEN r.slug = 'royalspice' THEN 0 ELSE 1 END, r.created_at ASC
         LIMIT 1
       `;
       const tableResult = await query(tableQuery, [tenantSlug || null, hostClean, token.trim()]);

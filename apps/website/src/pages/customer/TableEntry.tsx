@@ -9,6 +9,7 @@ export const TableEntry: React.FC = () => {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
   const token = searchParams.get('t') || searchParams.get('table');
+  const restoParam = searchParams.get('resto') || undefined;
   const { setTableContext, setOrderType } = useCart();
   const { restaurant } = useTenant();
 
@@ -23,7 +24,7 @@ export const TableEntry: React.FC = () => {
       return;
     }
 
-    publicApi.resolveQr(token)
+    publicApi.resolveQr(token, restoParam)
       .then((data) => {
         setTableData(data);
         // Automatically sync active tenant to the QR code's restaurant

@@ -112,8 +112,8 @@ export const devadminApi = {
 export const publicApi = {
   getRestaurant: (slug?: string) =>
     apiRequest('/public/restaurant', {}, slug ? { slug } : undefined),
-  resolveQr: (token: string) =>
-    apiRequest(`/public/qr/resolve?t=${encodeURIComponent(token)}`),
+  resolveQr: (token: string, resto?: string) =>
+    apiRequest(`/public/qr/resolve?t=${encodeURIComponent(token)}${resto ? `&resto=${encodeURIComponent(resto)}` : ''}`),
   getMenu: () =>
     apiRequest('/menu/public'),
   getReceipt: (token: string) =>

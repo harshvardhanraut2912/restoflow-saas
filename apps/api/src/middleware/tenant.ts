@@ -55,9 +55,14 @@ export async function resolveTenant(req: Request, res: Response, next: NextFunct
       }
     }
 
-    // 3. Fallback for root development on bare localhost
+    // 3. Fallback for root development on bare localhost or generic tunnel
     if (!restaurant) {
-      const countRes = await query<Restaurant>('SELECT * FROM restaurants WHERE status != \'deleted\' ORDER BY created_at ASC LIMIT 1');
+      const countRes = await query<Restaurant>(
+        `SELECT * FROM restaurants 
+         WHERE status != 'deleted' 
+         ORDER BY CASE WHEN slug = 'royalspice' THEN 0 ELSE 1 END, created_at ASC 
+         LIMIT 1`
+      );
       if (countRes.rows.length > 0) {
         restaurant = countRes.rows[0];
       }
