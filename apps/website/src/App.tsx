@@ -26,103 +26,208 @@ import { ManagerDashboard } from './pages/manager/ManagerDashboard.js';
 
 // Portal Hub / Landing Page
 const PlatformLanding: React.FC = () => {
-  const { restaurant, switchTenant } = useTenant();
+  const { restaurant } = useTenant();
+  const hostname = window.location.hostname.toLowerCase();
+  const isSubdomain = hostname.includes('.') && !hostname.startsWith('www.');
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col justify-center items-center p-6 select-none">
-      <div className="max-w-2xl w-full text-center space-y-6">
+    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col justify-center items-center p-6 selection:bg-rose-500 selection:text-white">
+      <div className="max-w-4xl w-full text-center space-y-6">
         <div className="w-16 h-16 rounded-3xl bg-rose-600/10 border border-rose-500/20 text-rose-500 flex items-center justify-center font-black text-2xl mx-auto shadow-2xl">
           🍽️
         </div>
 
         <div>
-          <h1 className="text-3xl font-black text-white tracking-tight">Smart Restaurant SaaS Operations</h1>
+          <h1 className="text-3xl font-black text-white tracking-tight">
+            {isSubdomain ? `${restaurant?.name || 'Restaurant'} Portal` : 'Smart Restaurant SaaS Operations'}
+          </h1>
           <p className="text-sm text-slate-400 mt-2">
-            Multi-Tenant QR Ordering, Kitchen Display System & Floor Control
+            {isSubdomain
+              ? `Subdomain: ${hostname} • Dedicated Restaurant Node`
+              : 'Multi-Tenant Subdomain Architecture • Independent Database Scoping & Floor Control'}
           </p>
         </div>
 
-        {/* Current Tenant Switcher */}
-        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 flex items-center justify-between text-xs max-w-md mx-auto">
-          <span className="text-slate-400">Active Tenant:</span>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => switchTenant('royalspice')}
-              className={`px-3 py-1.5 rounded-xl font-bold transition-colors ${
-                restaurant?.slug === 'royalspice' ? 'bg-rose-600 text-white' : 'bg-slate-800 text-slate-400 hover:text-white'
-              }`}
-            >
-              Royal Spice Bistro
-            </button>
-            <button
-              onClick={() => switchTenant('urbancrust')}
-              className={`px-3 py-1.5 rounded-xl font-bold transition-colors ${
-                restaurant?.slug === 'urbancrust' ? 'bg-orange-600 text-white' : 'bg-slate-800 text-slate-400 hover:text-white'
-              }`}
-            >
-              Urban Crust Pizzeria
-            </button>
+        {/* If on a subdomain, show this restaurant's dedicated direct links */}
+        {isSubdomain ? (
+          <div className="space-y-4">
+            <div className="p-3 bg-emerald-500/10 border border-emerald-500/20 rounded-2xl text-emerald-400 text-xs font-semibold inline-block">
+              ✓ Connected to Subdomain: <span className="font-mono text-white">{hostname}</span> ({restaurant?.name})
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 text-left">
+              {/* Customer Table 1 */}
+              <Link
+                to="/u/customer/table?t=1"
+                className="p-5 rounded-2xl bg-slate-900 border border-slate-800 hover:border-rose-500/50 transition-all hover:shadow-xl group"
+              >
+                <div className="text-xs font-bold text-rose-400 uppercase tracking-wider mb-1">Customer QR</div>
+                <div className="text-sm font-bold text-white group-hover:text-rose-400 transition-colors">
+                  Table 1 Ordering
+                </div>
+                <p className="text-[11px] text-slate-400 mt-1">
+                  /u/customer/table?t=1
+                </p>
+              </Link>
+
+              {/* Manager */}
+              <Link
+                to="/s/manager/dashboard"
+                className="p-5 rounded-2xl bg-slate-900 border border-slate-800 hover:border-indigo-500/50 transition-all hover:shadow-xl group"
+              >
+                <div className="text-xs font-bold text-indigo-400 uppercase tracking-wider mb-1">Manager</div>
+                <div className="text-sm font-bold text-white group-hover:text-indigo-400 transition-colors">
+                  Manager Console
+                </div>
+                <p className="text-[11px] text-slate-400 mt-1">
+                  Menu, sales, staff & QR
+                </p>
+              </Link>
+
+              {/* Waiter */}
+              <Link
+                to="/s/waiter/dashboard"
+                className="p-5 rounded-2xl bg-slate-900 border border-slate-800 hover:border-sky-500/50 transition-all hover:shadow-xl group"
+              >
+                <div className="text-xs font-bold text-sky-400 uppercase tracking-wider mb-1">Floor Staff</div>
+                <div className="text-sm font-bold text-white group-hover:text-sky-400 transition-colors">
+                  Waiter Floor Map
+                </div>
+                <p className="text-[11px] text-slate-400 mt-1">
+                  Active tables, bills & POS
+                </p>
+              </Link>
+
+              {/* Kitchen */}
+              <Link
+                to="/s/kitchen/dashboard"
+                className="p-5 rounded-2xl bg-slate-900 border border-slate-800 hover:border-amber-500/50 transition-all hover:shadow-xl group"
+              >
+                <div className="text-xs font-bold text-amber-400 uppercase tracking-wider mb-1">Kitchen</div>
+                <div className="text-sm font-bold text-white group-hover:text-amber-400 transition-colors">
+                  Kitchen KDS
+                </div>
+                <p className="text-[11px] text-slate-400 mt-1">
+                  Live tickets & timers
+                </p>
+              </Link>
+            </div>
           </div>
-        </div>
+        ) : (
+          /* When on bare localhost, show clear subdomain launcher cards for each tenant */
+          <div className="space-y-6">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 text-left">
+              {/* Restaurant 1: Royal Spice Bistro */}
+              <div className="p-6 rounded-3xl bg-slate-900 border border-slate-800 hover:border-rose-500/30 transition-all shadow-xl">
+                <div className="flex items-center justify-between mb-4">
+                  <div>
+                    <h2 className="text-lg font-bold text-white">Royal Spice Bistro</h2>
+                    <span className="font-mono text-xs text-rose-400">royalspice.localhost:5173</span>
+                  </div>
+                  <span className="px-2.5 py-1 rounded-full text-[10px] font-bold bg-rose-500/10 text-rose-400 border border-rose-500/20">
+                    Indian Fine Dining
+                  </span>
+                </div>
 
-        {/* Navigation Portals Grid */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-left">
-          {/* 1. Customer QR Entry Demo */}
-          <Link
-            to="/u/customer/table?t=demo_token_table_1_royalspice"
-            className="p-5 rounded-2xl bg-slate-900/80 border border-slate-800 hover:border-rose-500/50 transition-all hover:shadow-xl group"
-          >
-            <div className="text-xs font-bold text-rose-400 uppercase tracking-wider mb-1">Customer Flow</div>
-            <div className="text-base font-bold text-white group-hover:text-rose-400 transition-colors">
-              Table 1 QR Scan Entry
-            </div>
-            <p className="text-xs text-slate-400 mt-1">
-              Test scanning QR token (?t=demo_token_table_1_royalspice), browsing menu, and mobile checkout.
-            </p>
-          </Link>
+                <div className="space-y-2 text-xs">
+                  <a
+                    href="http://royalspice.localhost:5173/u/customer/table?t=1"
+                    className="flex items-center justify-between p-2.5 rounded-xl bg-slate-950 hover:bg-rose-950/40 border border-slate-800 hover:border-rose-500/40 text-slate-200 transition-colors"
+                  >
+                    <span className="font-medium">📱 Customer QR Table 1 (?t=1)</span>
+                    <span className="text-slate-500 text-[10px]">Launch ↗</span>
+                  </a>
+                  <a
+                    href="http://royalspice.localhost:5173/s/manager/dashboard"
+                    className="flex items-center justify-between p-2.5 rounded-xl bg-slate-950 hover:bg-slate-800 border border-slate-800 text-slate-200 transition-colors"
+                  >
+                    <span className="font-medium">👔 Manager Console</span>
+                    <span className="text-slate-500 text-[10px]">Launch ↗</span>
+                  </a>
+                  <a
+                    href="http://royalspice.localhost:5173/s/waiter/dashboard"
+                    className="flex items-center justify-between p-2.5 rounded-xl bg-slate-950 hover:bg-slate-800 border border-slate-800 text-slate-200 transition-colors"
+                  >
+                    <span className="font-medium">🛎️ Waiter Floor POS</span>
+                    <span className="text-slate-500 text-[10px]">Launch ↗</span>
+                  </a>
+                  <a
+                    href="http://royalspice.localhost:5173/s/kitchen/dashboard"
+                    className="flex items-center justify-between p-2.5 rounded-xl bg-slate-950 hover:bg-slate-800 border border-slate-800 text-slate-200 transition-colors"
+                  >
+                    <span className="font-medium">🍳 Kitchen KDS</span>
+                    <span className="text-slate-500 text-[10px]">Launch ↗</span>
+                  </a>
+                </div>
+              </div>
 
-          {/* 2. Staff Login */}
-          <Link
-            to="/s/login"
-            className="p-5 rounded-2xl bg-slate-900/80 border border-slate-800 hover:border-indigo-500/50 transition-all hover:shadow-xl group"
-          >
-            <div className="text-xs font-bold text-indigo-400 uppercase tracking-wider mb-1">Staff Access</div>
-            <div className="text-base font-bold text-white group-hover:text-indigo-400 transition-colors">
-              Staff Unified Login
-            </div>
-            <p className="text-xs text-slate-400 mt-1">
-              Role-based login for Manager, Waiter Floor Captain, and Head Chef (KDS).
-            </p>
-          </Link>
+              {/* Restaurant 2: Urban Crust Pizzeria */}
+              <div className="p-6 rounded-3xl bg-slate-900 border border-slate-800 hover:border-orange-500/30 transition-all shadow-xl">
+                <div className="flex items-center justify-between mb-4">
+                  <div>
+                    <h2 className="text-lg font-bold text-white">Urban Crust Pizzeria</h2>
+                    <span className="font-mono text-xs text-orange-400">urbancrust.localhost:5173</span>
+                  </div>
+                  <span className="px-2.5 py-1 rounded-full text-[10px] font-bold bg-orange-500/10 text-orange-400 border border-orange-500/20">
+                    Artisanal Sourdough
+                  </span>
+                </div>
 
-          {/* 3. Kitchen KDS Direct */}
-          <Link
-            to="/s/kitchen/dashboard"
-            className="p-5 rounded-2xl bg-slate-900/80 border border-slate-800 hover:border-amber-500/50 transition-all hover:shadow-xl group"
-          >
-            <div className="text-xs font-bold text-amber-400 uppercase tracking-wider mb-1">Kitchen Display</div>
-            <div className="text-base font-bold text-white group-hover:text-amber-400 transition-colors">
-              Kitchen Display System (KDS)
+                <div className="space-y-2 text-xs">
+                  <a
+                    href="http://urbancrust.localhost:5173/u/customer/table?t=1"
+                    className="flex items-center justify-between p-2.5 rounded-xl bg-slate-950 hover:bg-orange-950/40 border border-slate-800 hover:border-orange-500/40 text-slate-200 transition-colors"
+                  >
+                    <span className="font-medium">📱 Customer QR Table 1 (?t=1)</span>
+                    <span className="text-slate-500 text-[10px]">Launch ↗</span>
+                  </a>
+                  <a
+                    href="http://urbancrust.localhost:5173/s/manager/dashboard"
+                    className="flex items-center justify-between p-2.5 rounded-xl bg-slate-950 hover:bg-slate-800 border border-slate-800 text-slate-200 transition-colors"
+                  >
+                    <span className="font-medium">👔 Manager Console</span>
+                    <span className="text-slate-500 text-[10px]">Launch ↗</span>
+                  </a>
+                  <a
+                    href="http://urbancrust.localhost:5173/s/waiter/dashboard"
+                    className="flex items-center justify-between p-2.5 rounded-xl bg-slate-950 hover:bg-slate-800 border border-slate-800 text-slate-200 transition-colors"
+                  >
+                    <span className="font-medium">🛎️ Waiter Floor POS</span>
+                    <span className="text-slate-500 text-[10px]">Launch ↗</span>
+                  </a>
+                  <a
+                    href="http://urbancrust.localhost:5173/s/kitchen/dashboard"
+                    className="flex items-center justify-between p-2.5 rounded-xl bg-slate-950 hover:bg-slate-800 border border-slate-800 text-slate-200 transition-colors"
+                  >
+                    <span className="font-medium">🍳 Kitchen KDS</span>
+                    <span className="text-slate-500 text-[10px]">Launch ↗</span>
+                  </a>
+                </div>
+              </div>
             </div>
-            <p className="text-xs text-slate-400 mt-1">
-              High-contrast tablet view with elapsed timers, sound alerts, and ticket workflows.
-            </p>
-          </Link>
 
-          {/* 4. DevAdmin Management */}
-          <Link
-            to="/d/devadmin"
-            className="p-5 rounded-2xl bg-slate-900/80 border border-slate-800 hover:border-emerald-500/50 transition-all hover:shadow-xl group"
-          >
-            <div className="text-xs font-bold text-emerald-400 uppercase tracking-wider mb-1">Superadmin</div>
-            <div className="text-base font-bold text-white group-hover:text-emerald-400 transition-colors">
-              Platform DevAdmin Panel
+            {/* DevAdmin Banner */}
+            <div className="p-4 rounded-2xl bg-emerald-950/30 border border-emerald-500/30 flex items-center justify-between text-left">
+              <div>
+                <div className="text-sm font-bold text-white flex items-center gap-2">
+                  🛡️ DevAdmin Superadmin Panel
+                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 font-mono">
+                    /d/devadmin
+                  </span>
+                </div>
+                <div className="text-xs text-slate-400 mt-0.5">
+                  Provision new restaurants, pause tenant servers, set passwords, and manage quotas.
+                </div>
+              </div>
+              <Link
+                to="/d/devadmin"
+                className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs transition-colors shrink-0"
+              >
+                Open DevAdmin
+              </Link>
             </div>
-            <p className="text-xs text-slate-400 mt-1">
-              Restricted portal (/d/devadmin) to provision new restaurants, pause servers, or manage tenants.
-            </p>
-          </Link>
-        </div>
+          </div>
+        )}
       </div>
     </div>
   );

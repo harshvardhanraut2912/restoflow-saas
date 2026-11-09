@@ -8,13 +8,13 @@ let server: http.Server;
 const PORT = 5001;
 const BASE_URL = `http://localhost:${PORT}/api/v1`;
 
-async function fetchJson(endpoint: string, options: any = {}) {
+async function fetchJson(endpoint: string, options: any = {}): Promise<{ status: number; data: any }> {
   const headers = {
     'Content-Type': 'application/json',
     ...(options.headers || {})
   };
   const res = await fetch(`${BASE_URL}${endpoint}`, { ...options, headers });
-  const data = await res.json().catch(() => ({}));
+  const data: any = await res.json().catch(() => ({}));
   return { status: res.status, data };
 }
 

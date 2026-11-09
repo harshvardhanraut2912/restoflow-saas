@@ -8,7 +8,7 @@ import { useTenant } from '../../context/TenantContext.js';
 export const TableEntry: React.FC = () => {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
-  const token = searchParams.get('t');
+  const token = searchParams.get('t') || searchParams.get('table');
   const { setTableContext, setOrderType } = useCart();
   const { restaurant } = useTenant();
 

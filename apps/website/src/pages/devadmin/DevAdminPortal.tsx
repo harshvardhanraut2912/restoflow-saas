@@ -474,10 +474,10 @@ export const DevAdminPortal: React.FC = () => {
 
                           {/* Quick Launch Customer View */}
                           <a
-                            href={`/u/customer/menu?resto=${resto.slug}`}
+                            href={`http://${resto.slug}.localhost:5173/u/customer/table?t=1`}
                             target="_blank"
                             rel="noopener noreferrer"
-                            title="Open Customer QR Menu"
+                            title="Open Customer QR Table 1"
                             className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-colors"
                           >
                             <ExternalLink className="w-4 h-4" />
@@ -485,7 +485,7 @@ export const DevAdminPortal: React.FC = () => {
 
                           {/* Quick Launch Staff View */}
                           <a
-                            href={`/s/login?resto=${resto.slug}`}
+                            href={`http://${resto.slug}.localhost:5173/s/login`}
                             target="_blank"
                             rel="noopener noreferrer"
                             title="Open Staff Portal"

@@ -125,11 +125,41 @@ export const StaffLogin: React.FC = () => {
         </form>
 
         <div className="mt-8 pt-6 border-t border-slate-800/80 text-center text-[11px] text-slate-500">
-          Demo Staff Credentials:
-          <div className="text-slate-400 mt-1">
-            Manager: manager@royalspice.com / Manager@123<br />
-            Waiter: waiter@royalspice.com / Waiter@123<br />
-            Kitchen: kitchen@royalspice.com / Kitchen@123
+          Demo Staff Credentials ({restaurant?.name || 'Current Restaurant'}):
+          <div className="flex flex-wrap items-center justify-center gap-2 mt-3">
+            <button
+              type="button"
+              onClick={() => {
+                const domain = restaurant?.slug === 'urbancrust' ? 'urbancrust.com' : 'royalspice.com';
+                setEmail(`manager@${domain}`);
+                setPassword('Manager@123');
+              }}
+              className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-colors"
+            >
+              Fill Manager
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                const domain = restaurant?.slug === 'urbancrust' ? 'urbancrust.com' : 'royalspice.com';
+                setEmail(`waiter@${domain}`);
+                setPassword('Waiter@123');
+              }}
+              className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-colors"
+            >
+              Fill Waiter
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                const domain = restaurant?.slug === 'urbancrust' ? 'urbancrust.com' : 'royalspice.com';
+                setEmail(`kitchen@${domain}`);
+                setPassword(restaurant?.slug === 'urbancrust' ? 'Waiter@123' : 'Kitchen@123');
+              }}
+              className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-colors"
+            >
+              Fill Kitchen (KDS)
+            </button>
           </div>
         </div>
       </div>

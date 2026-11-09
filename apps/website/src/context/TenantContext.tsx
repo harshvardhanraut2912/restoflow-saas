@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import { RestaurantIdentity, RestaurantSettings } from '../types/index.js';
-import { publicApi, ApiError } from '../services/api.js';
+import { publicApi, ApiError, getActiveSubdomainSlug } from '../services/api.js';
 
 interface TenantContextType {
   restaurant: RestaurantIdentity | null;
@@ -23,20 +23,14 @@ export const TenantProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const [suspendedMessage, setSuspendedMessage] = useState('');
   const [error, setError] = useState<string | null>(null);
 
-  // Check URL query params for ?resto=slug override (e.g. ?resto=royalspice or ?resto=urbancrust)
-  const urlParams = new URLSearchParams(window.location.search);
-  const paramResto = urlParams.get('resto');
-  if (paramResto) {
-    localStorage.setItem('active_tenant_slug', paramResto);
-  }
-
   const loadTenant = async () => {
     setIsLoading(true);
     setIsSuspended(false);
     setError(null);
 
     try {
-      const data = await publicApi.getRestaurant();
+      const subdomain = getActiveSubdomainSlug();
+      const data = await publicApi.getRestaurant(subdomain || undefined);
       setRestaurant(data.restaurant);
       setSettings(data.settings);
       localStorage.setItem('active_tenant_slug', data.restaurant.slug);

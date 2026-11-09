@@ -7,8 +7,19 @@ export const serviceRequestsRouter = Router();
 
 // Customer creates service request (water, cutlery, waiter, bill, cleaning)
 serviceRequestsRouter.post('/customer', resolveTenant, async (req: Request, res: Response) => {
-  const { table_id, table_session_id, request_type, notes } = req.body;
+  let { table_id, table_session_id, order_id, request_type = 'waiter', notes } = req.body;
   const restaurant = req.restaurant!;
+
+  if (order_id && (!table_id || !table_session_id)) {
+    const oRes = await query(
+      'SELECT table_id, table_session_id FROM orders WHERE id = $1 AND restaurant_id = $2',
+      [order_id, restaurant.id]
+    );
+    if (oRes.rows.length > 0) {
+      table_id = table_id || oRes.rows[0].table_id;
+      table_session_id = table_session_id || oRes.rows[0].table_session_id;
+    }
+  }
 
   if (!table_id || !table_session_id || !request_type) {
     res.status(400).json({ error: 'MISSING_FIELDS', message: 'Table, session, and request type are required.' });
@@ -25,7 +36,7 @@ serviceRequestsRouter.post('/customer', resolveTenant, async (req: Request, res:
       `INSERT INTO service_requests (restaurant_id, table_session_id, table_id, request_type, notes, status)
        VALUES ($1, $2, $3, $4, $5, 'pending')
        RETURNING *`,
-      [restaurant.id, table_session_id, table_id, request_type, notes || null]
+      [restaurant.id, table_session_id, table_id, request_type, notes || 'Customer called waiter']
     );
 
     res.status(201).json({ request: result.rows[0] });

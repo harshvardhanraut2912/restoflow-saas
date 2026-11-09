@@ -73,7 +73,7 @@ kitchenRouter.get('/tickets', resolveTenant, requireStaff(['kitchen', 'manager',
 });
 
 // Update Ticket Status (acknowledged, preparing, ready)
-kitchenRouter.patch('/tickets/:id/status', resolveTenant, requireStaff(['kitchen', 'manager']), async (req: Request, res: Response) => {
+kitchenRouter.patch('/tickets/:id/status', resolveTenant, requireStaff(['kitchen', 'manager', 'waiter']), async (req: Request, res: Response) => {
   const { id } = req.params;
   const { status } = req.body;
   const restaurant = req.restaurant!;

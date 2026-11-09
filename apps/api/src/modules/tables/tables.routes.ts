@@ -108,9 +108,10 @@ tablesRouter.post('/:id/qr', resolveTenant, requireStaff(['manager']), async (re
       );
     });
 
-    // Generate real scannable QR Code Data URL pointing to the customer route
-    const host = restaurant.primary_domain || `${restaurant.slug}.localhost:5173`;
-    const qrUrl = `${env.CLIENT_URL}/u/customer/table?t=${rawToken}`;
+    // Generate real scannable QR Code Data URL pointing to the customer route with restaurant subdomain
+    const domain = restaurant.primary_domain || `${restaurant.slug}.localhost:5173`;
+    const qrBase = domain.includes(':') ? `http://${domain}` : `https://${domain}`;
+    const qrUrl = `${qrBase}/u/customer/table?t=${rawToken}`;
     const qrDataUrl = await QRCode.toDataURL(qrUrl, {
       errorCorrectionLevel: 'H',
       margin: 2,

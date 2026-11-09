@@ -365,10 +365,25 @@ ordersRouter.get('/customer/:id', resolveTenant, async (req: Request, res: Respo
       [order.id]
     );
 
+    // Check bill and payment status for this order / session
+    const billRes = await query(
+      `SELECT id, bill_number, status, grand_total_paise, receipt_token_hash, settled_at 
+       FROM bills 
+       WHERE restaurant_id = $1 AND (order_id = $2 OR (table_session_id = $3 AND $3 IS NOT NULL))
+       ORDER BY created_at DESC LIMIT 1`,
+      [restaurant.id, order.id, order.table_session_id || null]
+    );
+
+    const bill = billRes.rows[0] || null;
+    const isPaid = bill?.status === 'paid' || order.status === 'completed';
+
     res.json({
       order: {
         ...order,
-        items: itemsRes.rows
+        items: itemsRes.rows,
+        bill,
+        is_paid: isPaid,
+        receipt_token: bill?.receipt_token_hash || null
       }
     });
   } catch (err: any) {
@@ -385,7 +400,15 @@ ordersRouter.get('/staff/list', resolveTenant, requireStaff(['manager', 'waiter'
   try {
     let sql = `
       SELECT o.*, dt.table_number, c.name as customer_name,
-        (SELECT COUNT(*) FROM order_items WHERE order_id = o.id) as item_count
+        (SELECT COUNT(*) FROM order_items WHERE order_id = o.id) as item_count,
+        COALESCE(
+          (SELECT json_agg(json_build_object(
+            'name', oi.name_snapshot,
+            'variant', oi.variant_name_snapshot,
+            'quantity', oi.quantity
+          )) FROM order_items oi WHERE oi.order_id = o.id), '[]'::json
+        ) as items,
+        (SELECT b.status FROM bills b WHERE (b.order_id = o.id OR (b.table_session_id = o.table_session_id AND o.table_session_id IS NOT NULL)) ORDER BY b.created_at DESC LIMIT 1) as bill_status
       FROM orders o
       LEFT JOIN dining_tables dt ON dt.id = o.table_id
       LEFT JOIN customers c ON c.id = o.customer_id

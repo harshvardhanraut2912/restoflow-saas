@@ -5,38 +5,24 @@ import { Restaurant, RestaurantSettings } from '../types/index.js';
 export async function resolveTenant(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     const customId = req.headers['x-restaurant-id'] as string;
-    const customSlug = req.headers['x-restaurant-slug'] as string;
+    const customSlug = (req.headers['x-restaurant-slug'] || req.query.resto) as string;
     const hostHeader = (req.headers['x-forwarded-host'] || req.headers.host || req.hostname || '') as string;
     const hostClean = hostHeader.split(':')[0].toLowerCase();
 
     let restaurant: Restaurant | null = null;
 
-    if (customId) {
-      const result = await query<Restaurant>('SELECT * FROM restaurants WHERE id = $1', [customId]);
-      if (result.rows.length > 0) {
-        restaurant = result.rows[0];
-      }
-    }
-
-    if (!restaurant && customSlug) {
-      const result = await query<Restaurant>('SELECT * FROM restaurants WHERE slug = $1', [customSlug.toLowerCase()]);
-      if (result.rows.length > 0) {
-        restaurant = result.rows[0];
-      }
-    }
-
-    // Try host matching
-    if (!restaurant && hostClean) {
-      // Direct primary_domain match
-      let result = await query<Restaurant>('SELECT * FROM restaurants WHERE primary_domain = $1', [hostClean]);
+    // 1. Authoritative Host & Subdomain Matching FIRST
+    if (hostClean) {
+      // Direct primary_domain match (e.g. "urbancrust.localhost", "royalspice.localhost", or production FQDN)
+      let result = await query<Restaurant>('SELECT * FROM restaurants WHERE primary_domain = $1 AND status != \'deleted\'', [hostClean]);
       if (result.rows.length > 0) {
         restaurant = result.rows[0];
       } else {
-        // Subdomain extraction e.g. "bistro.localhost" -> "bistro"
+        // Subdomain extraction e.g. "urbancrust.localhost" -> "urbancrust"
         const parts = hostClean.split('.');
         if (parts.length >= 2 && parts[0] !== 'www' && parts[0] !== 'localhost') {
           const subSlug = parts[0];
-          result = await query<Restaurant>('SELECT * FROM restaurants WHERE slug = $1', [subSlug]);
+          result = await query<Restaurant>('SELECT * FROM restaurants WHERE slug = $1 AND status != \'deleted\'', [subSlug]);
           if (result.rows.length > 0) {
             restaurant = result.rows[0];
           }
@@ -44,7 +30,22 @@ export async function resolveTenant(req: Request, res: Response, next: NextFunct
       }
     }
 
-    // If still no restaurant resolved, check if there's only 1 active restaurant in DB as fallback for development
+    // 2. Header or query param matching if no domain-level tenant resolved
+    if (!restaurant && customSlug) {
+      const result = await query<Restaurant>('SELECT * FROM restaurants WHERE slug = $1 AND status != \'deleted\'', [customSlug.toLowerCase()]);
+      if (result.rows.length > 0) {
+        restaurant = result.rows[0];
+      }
+    }
+
+    if (!restaurant && customId) {
+      const result = await query<Restaurant>('SELECT * FROM restaurants WHERE id = $1 AND status != \'deleted\'', [customId]);
+      if (result.rows.length > 0) {
+        restaurant = result.rows[0];
+      }
+    }
+
+    // 3. Fallback for root development on bare localhost
     if (!restaurant) {
       const countRes = await query<Restaurant>('SELECT * FROM restaurants WHERE status != \'deleted\' ORDER BY created_at ASC LIMIT 1');
       if (countRes.rows.length > 0) {

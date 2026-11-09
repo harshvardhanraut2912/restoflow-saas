@@ -243,12 +243,26 @@ billingRouter.post('/payments', resolveTenant, requireStaff(['waiter', 'manager'
       if (totalPaid >= bill.grand_total_paise) {
         await client.query(`UPDATE bills SET status = 'paid', settled_at = now() WHERE id = $1`, [bill.id]);
 
-        // If linked to table session, close session and free table
+        // Complete orders
         if (bill.table_session_id) {
-          const sessionRes = await client.query(`UPDATE table_sessions SET status = 'closed', closed_at = now() WHERE id = $1 RETURNING table_id`, [bill.table_session_id]);
+          await client.query(
+            `UPDATE orders SET status = 'completed', updated_at = now() 
+             WHERE table_session_id = $1 AND status NOT IN ('cancelled', 'rejected')`,
+            [bill.table_session_id]
+          );
+          const sessionRes = await client.query(
+            `UPDATE table_sessions SET status = 'closed', closed_at = now() WHERE id = $1 RETURNING table_id`,
+            [bill.table_session_id]
+          );
           if (sessionRes.rows.length > 0) {
             await client.query(`UPDATE dining_tables SET status = 'available' WHERE id = $1`, [sessionRes.rows[0].table_id]);
           }
+        } else if (bill.order_id) {
+          await client.query(
+            `UPDATE orders SET status = 'completed', updated_at = now() 
+             WHERE id = $1 AND status NOT IN ('cancelled', 'rejected')`,
+            [bill.order_id]
+          );
         }
 
         // Accrue Loyalty Points: 1 point per ₹1 eligible spend (net item subtotal after discount)
@@ -296,6 +310,156 @@ billingRouter.post('/payments', resolveTenant, requireStaff(['waiter', 'manager'
   } catch (err: any) {
     console.error('Payment recording error:', err);
     res.status(400).json({ error: 'PAYMENT_FAILED', message: err.message || 'Failed to record payment.' });
+  }
+});
+
+// ==========================================
+// 3b. Customer Online Payment (Exclusively sets bill & order to Paid)
+// ==========================================
+billingRouter.post('/customer/pay', resolveTenant, async (req: Request, res: Response) => {
+  const { order_id, table_session_id, method = 'online_gateway' } = req.body;
+  const restaurant = req.restaurant!;
+  const settings = req.restaurantSettings!;
+
+  if (!order_id && !table_session_id) {
+    res.status(400).json({ error: 'MISSING_TARGET', message: 'Either order_id or table_session_id is required.' });
+    return;
+  }
+
+  try {
+    const result = await withTransaction(async (client) => {
+      // 1. Check if bill already generated
+      let billRes = await client.query(
+        `SELECT * FROM bills 
+         WHERE restaurant_id = $1 AND (order_id = $2 OR (table_session_id = $3 AND $3 IS NOT NULL))
+         ORDER BY created_at DESC LIMIT 1`,
+        [restaurant.id, order_id || null, table_session_id || null]
+      );
+
+      let bill = billRes.rows[0];
+
+      // If already paid, return settled status
+      if (bill && bill.status === 'paid') {
+        return {
+          already_paid: true,
+          bill,
+          receipt_token: bill.receipt_token_hash,
+          is_fully_paid: true,
+          message: 'Bill has already been settled and marked Paid.'
+        };
+      }
+
+      // If bill does not exist, compute and generate it
+      if (!bill) {
+        let subtotalPaise = 0;
+        let packagingChargePaise = 0;
+
+        if (table_session_id) {
+          const itemsRes = await client.query(
+            `SELECT oi.total_price_paise 
+             FROM order_items oi
+             JOIN orders o ON o.id = oi.order_id
+             WHERE o.table_session_id = $1 AND o.status NOT IN ('cancelled', 'rejected')`,
+            [table_session_id]
+          );
+          for (const item of itemsRes.rows) {
+            subtotalPaise += item.total_price_paise;
+          }
+        } else {
+          const oRes = await client.query('SELECT * FROM orders WHERE id = $1', [order_id]);
+          if (oRes.rows.length === 0) throw new Error('Order not found.');
+          subtotalPaise = oRes.rows[0].subtotal_paise;
+          if (oRes.rows[0].order_type === 'takeaway') {
+            packagingChargePaise = settings.packaging_charge_paise || 0;
+          }
+        }
+
+        if (subtotalPaise === 0) {
+          throw new Error('Cannot pay bill for 0 items.');
+        }
+
+        const taxPercent = Number(settings.tax_rate_percent || 5);
+        const servicePercent = Number(settings.service_charge_percent || 0);
+
+        const taxPaise = Math.round(subtotalPaise * (taxPercent / 100));
+        const serviceChargePaise = Math.round(subtotalPaise * (servicePercent / 100));
+        const unrounded = subtotalPaise + taxPaise + serviceChargePaise + packagingChargePaise;
+        const remainder = unrounded % 100;
+        let roundOffPaise = 0;
+        if (remainder >= 50) roundOffPaise = 100 - remainder;
+        else if (remainder > 0) roundOffPaise = -remainder;
+        const grandTotalPaise = unrounded + roundOffPaise;
+
+        const countRes = await client.query(`SELECT COUNT(*) FROM bills WHERE restaurant_id = $1`, [restaurant.id]);
+        const billNumber = `INV-${new Date().getFullYear()}-${1000 + parseInt(countRes.rows[0].count, 10) + 1}`;
+        const rawReceiptToken = crypto.randomBytes(24).toString('hex');
+        const receiptHash = crypto.createHash('sha256').update(rawReceiptToken).digest('hex');
+
+        const newBill = await client.query(
+          `INSERT INTO bills 
+            (restaurant_id, bill_number, table_session_id, order_id, subtotal_paise, discount_paise, tax_paise, service_charge_paise, packaging_charge_paise, round_off_paise, grand_total_paise, status, receipt_token_hash)
+           VALUES ($1, $2, $3, $4, $5, 0, $6, $7, $8, $9, $10, 'unpaid', $11)
+           RETURNING *`,
+          [restaurant.id, billNumber, table_session_id || null, order_id || null, subtotalPaise, taxPaise, serviceChargePaise, packagingChargePaise, roundOffPaise, grandTotalPaise, receiptHash]
+        );
+        bill = newBill.rows[0];
+      }
+
+      // Check again if already paid
+      if (bill.status === 'paid') {
+        return {
+          already_paid: true,
+          bill,
+          receipt_token: bill.receipt_token_hash,
+          is_fully_paid: true,
+          message: 'Bill has already been settled and marked Paid.'
+        };
+      }
+
+      // Record Customer Online Payment
+      await client.query(
+        `INSERT INTO payments (restaurant_id, bill_id, amount_paise, method, status, transaction_reference)
+         VALUES ($1, $2, $3, $4, 'completed', $5)`,
+        [restaurant.id, bill.id, bill.grand_total_paise, method, 'ONLINE_' + Date.now()]
+      );
+
+      // Mark Bill Settled & Paid
+      await client.query(`UPDATE bills SET status = 'paid', settled_at = now() WHERE id = $1`, [bill.id]);
+
+      // Complete orders
+      if (table_session_id) {
+        await client.query(
+          `UPDATE orders SET status = 'completed', updated_at = now() 
+           WHERE table_session_id = $1 AND status NOT IN ('cancelled', 'rejected')`,
+          [table_session_id]
+        );
+        const sRes = await client.query(
+          `UPDATE table_sessions SET status = 'closed', closed_at = now() WHERE id = $1 RETURNING table_id`,
+          [table_session_id]
+        );
+        if (sRes.rows.length > 0) {
+          await client.query(`UPDATE dining_tables SET status = 'available' WHERE id = $1`, [sRes.rows[0].table_id]);
+        }
+      } else if (order_id) {
+        await client.query(
+          `UPDATE orders SET status = 'completed', updated_at = now() 
+           WHERE id = $1 AND status NOT IN ('cancelled', 'rejected')`,
+          [order_id]
+        );
+      }
+
+      return {
+        already_paid: false,
+        bill,
+        is_fully_paid: true,
+        receipt_token: bill.receipt_token_hash
+      };
+    });
+
+    res.status(200).json(result);
+  } catch (err: any) {
+    console.error('Customer payment error:', err);
+    res.status(400).json({ error: 'PAYMENT_FAILED', message: err.message || 'Payment processing failed.' });
   }
 });
 

@@ -1,7 +1,15 @@
 import pg from 'pg';
+import dns from 'dns';
 import { createClient } from '@supabase/supabase-js';
 import WebSocket from 'ws';
 import { env } from '../config/env.js';
+
+// Configure fast reliable DNS servers to prevent local stub resolver IPv6 timeouts
+try {
+  dns.setServers(['8.8.8.8', '1.1.1.1']);
+} catch {
+  // Ignore in environments where setting DNS servers is restricted
+}
 
 // Polyfill WebSocket for Node 18 environments
 if (typeof globalThis.WebSocket === 'undefined') {

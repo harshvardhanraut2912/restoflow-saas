@@ -23,11 +23,14 @@ export const WaiterFloor: React.FC = () => {
   const { user, logout } = useStaffAuth();
   const { restaurant } = useTenant();
 
-  const [activeTab, setActiveTab] = useState<'tables' | 'orders' | 'requests'>('tables');
+  const [activeTab, setActiveTab] = useState<'tables' | 'serve' | 'orders' | 'requests'>('tables');
   const [tables, setTables] = useState<any[]>([]);
   const [activeOrders, setActiveOrders] = useState<any[]>([]);
   const [serviceRequests, setServiceRequests] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+
+  // Orders in 'ready' status awaiting waiter delivery
+  const readyOrders = activeOrders.filter((o) => o.status === 'ready');
 
   // Selected Table Drawer State
   const [selectedTable, setSelectedTable] = useState<any | null>(null);
@@ -78,6 +81,15 @@ export const WaiterFloor: React.FC = () => {
       } catch {
         setSessionBill(null);
       }
+    }
+  };
+
+  const handleMarkServed = async (orderId: string) => {
+    try {
+      await waiterApi.markServed(orderId);
+      loadData();
+    } catch (err: any) {
+      alert(err.message || 'Failed to mark order as served.');
     }
   };
 
@@ -154,7 +166,7 @@ export const WaiterFloor: React.FC = () => {
       setIsSettlingBill(false);
       setSelectedTable(null);
       loadData();
-      alert(`Bill settled successfully via ${paymentMethod.toUpperCase()}! Table is now available.`);
+      alert(`Payment marked 'Paid' successfully via ${paymentMethod.toUpperCase()}! Order is completed and table is settled.`);
     } catch (err: any) {
       alert(err.message || 'Payment settlement failed.');
     } finally {
@@ -179,18 +191,32 @@ export const WaiterFloor: React.FC = () => {
         </div>
 
         {/* Navigation Tabs */}
-        <div className="flex items-center gap-2 bg-slate-900 p-1 rounded-2xl border border-slate-800">
+        <div className="flex items-center gap-1.5 bg-slate-900 p-1 rounded-2xl border border-slate-800">
           <button
             onClick={() => setActiveTab('tables')}
-            className={`px-4 py-1.5 rounded-xl text-xs font-semibold transition-all ${
+            className={`px-3 sm:px-4 py-1.5 rounded-xl text-xs font-semibold transition-all ${
               activeTab === 'tables' ? 'bg-rose-600 text-white shadow-md' : 'text-slate-400 hover:text-white'
             }`}
           >
             Dining Tables ({tables.length})
           </button>
           <button
+            onClick={() => setActiveTab('serve')}
+            className={`px-3 sm:px-4 py-1.5 rounded-xl text-xs font-semibold transition-all relative flex items-center gap-1.5 ${
+              activeTab === 'serve' ? 'bg-emerald-600 text-white shadow-md' : 'text-slate-400 hover:text-white'
+            }`}
+          >
+            Serve Order ({readyOrders.length})
+            {readyOrders.length > 0 && (
+              <span className="relative flex h-2 w-2">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+              </span>
+            )}
+          </button>
+          <button
             onClick={() => setActiveTab('orders')}
-            className={`px-4 py-1.5 rounded-xl text-xs font-semibold transition-all ${
+            className={`px-3 sm:px-4 py-1.5 rounded-xl text-xs font-semibold transition-all ${
               activeTab === 'orders' ? 'bg-rose-600 text-white shadow-md' : 'text-slate-400 hover:text-white'
             }`}
           >
@@ -198,7 +224,7 @@ export const WaiterFloor: React.FC = () => {
           </button>
           <button
             onClick={() => setActiveTab('requests')}
-            className={`px-4 py-1.5 rounded-xl text-xs font-semibold transition-all relative ${
+            className={`px-3 sm:px-4 py-1.5 rounded-xl text-xs font-semibold transition-all relative ${
               activeTab === 'requests' ? 'bg-rose-600 text-white shadow-md' : 'text-slate-400 hover:text-white'
             }`}
           >
@@ -287,7 +313,102 @@ export const WaiterFloor: React.FC = () => {
           </div>
         )}
 
-        {/* TAB 2: ACTIVE ORDERS */}
+        {/* TAB 2: SERVE ORDER (READY TICKETS FROM KITCHEN) */}
+        {activeTab === 'serve' && (
+          <div className="space-y-6">
+            <div className="flex items-center justify-between">
+              <div>
+                <h2 className="text-base font-bold text-white flex items-center gap-2">
+                  Ready to Serve ({readyOrders.length})
+                  {readyOrders.length > 0 && (
+                    <span className="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 animate-pulse">
+                      Hot & Prepared
+                    </span>
+                  )}
+                </h2>
+                <p className="text-xs text-slate-400">Fresh dishes prepared by kitchen awaiting table delivery</p>
+              </div>
+            </div>
+
+            {readyOrders.length === 0 ? (
+              <div className="py-20 text-center rounded-3xl bg-slate-950/40 border border-slate-800">
+                <Utensils className="w-12 h-12 text-slate-600 mx-auto mb-3" />
+                <h3 className="text-sm font-bold text-slate-300">All Dishes Served</h3>
+                <p className="text-xs text-slate-500 mt-1">When the kitchen marks orders 'Ready', they will blink in green here.</p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                {readyOrders.map((o) => (
+                  <div
+                    key={o.id}
+                    className="rounded-3xl p-6 bg-slate-950 border-2 border-emerald-500 shadow-xl shadow-emerald-500/20 flex flex-col justify-between space-y-4 animate-pulse relative overflow-hidden ring-2 ring-emerald-400/50"
+                  >
+                    {/* Glowing Accent Top Bar */}
+                    <div className="absolute top-0 left-0 right-0 h-1.5 bg-gradient-to-r from-emerald-500 via-emerald-400 to-teal-400"></div>
+
+                    <div>
+                      {/* Table & Order Header */}
+                      <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+                        <div>
+                          <div className="text-2xl font-black text-white flex items-center gap-2">
+                            {o.table_number ? `Table ${o.table_number}` : 'Takeaway'}
+                          </div>
+                          <div className="text-xs text-slate-400 font-mono mt-0.5">Order #{o.order_number}</div>
+                        </div>
+
+                        {/* Blinking Green Badge saying 'Ready to Serve' */}
+                        <div className="px-3 py-1.5 rounded-xl bg-emerald-500/20 border border-emerald-400 text-emerald-300 text-xs font-black tracking-wider uppercase flex items-center gap-1.5 shadow-md shadow-emerald-500/30 animate-pulse">
+                          <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-ping"></span>
+                          Ready to Serve
+                        </div>
+                      </div>
+
+                      {/* Dishes List */}
+                      <div className="mt-4 space-y-2">
+                        <div className="text-[11px] font-bold uppercase tracking-wider text-slate-400">
+                          Items to Deliver:
+                        </div>
+                        <div className="space-y-1.5 max-h-48 overflow-y-auto pr-1">
+                          {o.items && o.items.length > 0 ? (
+                            o.items.map((item: any, idx: number) => (
+                              <div key={idx} className="flex items-center justify-between text-xs py-1.5 px-3 rounded-xl bg-slate-900 border border-slate-800">
+                                <span className="font-semibold text-white">
+                                  {item.quantity}x {item.name}
+                                </span>
+                                {item.variant && (
+                                  <span className="text-[10px] text-slate-400">({item.variant})</span>
+                                )}
+                              </div>
+                            ))
+                          ) : (
+                            <div className="text-xs text-slate-400 italic">Dishes prepared & hot</div>
+                          )}
+                        </div>
+                      </div>
+
+                      {o.notes && (
+                        <div className="mt-3 p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/20 text-amber-300 text-[11px]">
+                          Note: {o.notes}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Mark as Served Button */}
+                    <button
+                      onClick={() => handleMarkServed(o.id)}
+                      className="w-full bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 active:scale-98 text-white font-black py-3.5 rounded-2xl text-sm transition-all shadow-lg shadow-emerald-900/40 flex items-center justify-center gap-2"
+                    >
+                      <CheckCircle className="w-5 h-5" />
+                      Mark as Served
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* TAB 3: ACTIVE ORDERS */}
         {activeTab === 'orders' && (
           <div className="space-y-4">
             <h2 className="text-base font-bold text-white">Floor Orders Timeline</h2>
@@ -420,10 +541,10 @@ export const WaiterFloor: React.FC = () => {
             {sessionBill && (
               <button
                 onClick={() => setIsSettlingBill(true)}
-                className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-3.5 rounded-xl text-xs flex items-center justify-center gap-2 shadow-lg shadow-emerald-900/30"
+                className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-black py-3.5 rounded-xl text-xs flex items-center justify-center gap-2 shadow-lg shadow-emerald-900/30"
               >
                 <DollarSign className="w-4 h-4" />
-                Settle Bill & Free Table
+                Payment (Collect & Mark 'Paid')
               </button>
             )}
           </div>
@@ -435,7 +556,7 @@ export const WaiterFloor: React.FC = () => {
         <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-slate-900 border border-slate-800 rounded-3xl max-w-sm w-full p-6 shadow-2xl">
             <h3 className="text-base font-bold text-white mb-1">
-              Settle Table {selectedTable?.table_number} Bill
+              Table {selectedTable?.table_number} Bill Payment
             </h3>
             <p className="text-xs text-slate-400 mb-4">Total Amount: ₹{((sessionBill?.grand_total_paise || 0) / 100).toFixed(2)}</p>
 
@@ -489,7 +610,7 @@ export const WaiterFloor: React.FC = () => {
                 disabled={isProcessingPayment}
                 className="px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold flex items-center gap-2"
               >
-                {isProcessingPayment ? 'Processing...' : 'Confirm Payment'}
+                {isProcessingPayment ? 'Processing...' : "Confirm Payment & Mark 'Paid'"}
               </button>
             </div>
           </div>

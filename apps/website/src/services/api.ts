@@ -10,6 +10,27 @@ export class ApiError extends Error {
   }
 }
 
+export function getActiveSubdomainSlug(): string | null {
+  if (typeof window === 'undefined') return null;
+
+  // 1. Direct subdomain extraction e.g. "royalspice.localhost" -> "royalspice"
+  const hostname = window.location.hostname.toLowerCase();
+  const parts = hostname.split('.');
+  if (parts.length >= 2 && parts[0] !== 'www' && parts[0] !== 'localhost') {
+    return parts[0];
+  }
+
+  // 2. Query parameter fallback e.g. ?resto=urbancrust
+  const urlParams = new URLSearchParams(window.location.search);
+  const paramResto = urlParams.get('resto');
+  if (paramResto) {
+    return paramResto.toLowerCase();
+  }
+
+  // 3. Fallback to localStorage
+  return localStorage.getItem('active_tenant_slug');
+}
+
 export async function apiRequest<T = any>(
   endpoint: string,
   options: RequestInit = {},
@@ -33,15 +54,16 @@ export async function apiRequest<T = any>(
   }
 
   // Tenant scoping headers
-  const storedTenantSlug = tenantOverride?.slug || localStorage.getItem('active_tenant_slug');
-  const storedTenantId = tenantOverride?.id || localStorage.getItem('active_tenant_id');
+  const resolvedSlug = tenantOverride?.slug || getActiveSubdomainSlug();
+  const resolvedId = tenantOverride?.id;
 
-  if (storedTenantSlug) {
-    headers['x-restaurant-slug'] = storedTenantSlug;
+  if (resolvedSlug) {
+    headers['x-restaurant-slug'] = resolvedSlug;
   }
-  if (storedTenantId) {
-    headers['x-restaurant-id'] = storedTenantId;
+  if (resolvedId) {
+    headers['x-restaurant-id'] = resolvedId;
   }
+  headers['x-forwarded-host'] = window.location.host;
 
   const url = `${API_BASE}${endpoint.startsWith('/') ? endpoint : `/${endpoint}`}`;
   const res = await fetch(url, {
@@ -96,8 +118,10 @@ export const customerApi = {
     apiRequest(`/orders/customer/${id}?token=${encodeURIComponent(token)}`),
   getSessionBill: (sessionId: string) =>
     apiRequest(`/billing/session/${sessionId}`),
-  requestService: (data: { table_id: string; table_session_id: string; request_type: string; notes?: string }) =>
+  requestService: (data: { table_id?: string; table_session_id?: string; order_id?: string; request_type: string; notes?: string }) =>
     apiRequest('/service-requests/customer', { method: 'POST', body: JSON.stringify(data) }),
+  payOnline: (data: { order_id?: string; table_session_id?: string; method?: string }) =>
+    apiRequest('/billing/customer/pay', { method: 'POST', body: JSON.stringify(data) }),
 };
 
 // Staff Auth APIs
@@ -118,6 +142,8 @@ export const waiterApi = {
     apiRequest(`/orders/staff/list${status ? `?status=${status}` : ''}`),
   updateOrderStatus: (id: string, status: string) =>
     apiRequest(`/orders/${id}/status`, { method: 'PATCH', body: JSON.stringify({ status }) }),
+  markServed: (id: string) =>
+    apiRequest(`/orders/${id}/status`, { method: 'PATCH', body: JSON.stringify({ status: 'served' }) }),
   getServiceRequests: () =>
     apiRequest('/service-requests/waiter'),
   resolveServiceRequest: (id: string) =>

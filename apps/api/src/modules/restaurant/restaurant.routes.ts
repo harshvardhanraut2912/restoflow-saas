@@ -68,12 +68,57 @@ restaurantRouter.get('/qr/resolve', async (req: Request, res: Response) => {
       [tokenHash]
     );
 
-    if (qrResult.rows.length === 0) {
+    let qr = qrResult.rows[0];
+
+    // If opaque hash didn't match, check if token is a direct table number/identifier on the tenant
+    if (!qr) {
+      const hostHeader = (req.headers['x-forwarded-host'] || req.headers.host || req.hostname || '') as string;
+      const hostClean = hostHeader.split(':')[0].toLowerCase();
+      let tenantSlug = (req.headers['x-restaurant-slug'] || req.query.resto) as string;
+
+      if (!tenantSlug && hostClean) {
+        const parts = hostClean.split('.');
+        if (parts.length >= 2 && parts[0] !== 'www' && parts[0] !== 'localhost') {
+          tenantSlug = parts[0];
+        }
+      }
+
+      // Query dining_tables matching table number or formatted table number (e.g. 1 -> T-01)
+      const tableQuery = `
+        SELECT 
+          dt.id as table_id, 
+          dt.table_number, 
+          dt.capacity, 
+          dt.status as table_status, 
+          dt.is_active as table_active,
+          r.id as restaurant_id,
+          r.name as restaurant_name,
+          r.slug as restaurant_slug,
+          r.logo_url as restaurant_logo_url,
+          r.primary_color as restaurant_primary_color,
+          r.status as restaurant_status
+        FROM dining_tables dt
+        JOIN restaurants r ON r.id = dt.restaurant_id
+        WHERE (r.slug = $1 OR r.primary_domain = $2 OR ($1 IS NULL AND r.status != 'deleted'))
+          AND (
+            LOWER(dt.table_number) = LOWER($3)
+            OR LOWER(dt.table_number) = LOWER('T-' || LPAD($3, 2, '0'))
+            OR LOWER(dt.table_number) = LOWER('T-' || $3)
+            OR LOWER(dt.table_number) = LOWER('Table ' || $3)
+          )
+        ORDER BY r.created_at ASC
+        LIMIT 1
+      `;
+      const tableResult = await query(tableQuery, [tenantSlug || null, hostClean, token.trim()]);
+      if (tableResult.rows.length > 0) {
+        qr = tableResult.rows[0];
+      }
+    }
+
+    if (!qr) {
       res.status(404).json({ error: 'INVALID_QR', message: 'This QR code is invalid or has been revoked.' });
       return;
     }
-
-    const qr = qrResult.rows[0];
 
     if (qr.restaurant_status === 'suspended') {
       res.status(403).json({
