@@ -42,6 +42,12 @@ export const CustomerCheckout: React.FC = () => {
       return;
     }
 
+    if (orderType === 'dine_in' && !tableContext.tableId) {
+      setError('Please select your dining table before placing a dine-in order.');
+      navigate('/u/customer/cart');
+      return;
+    }
+
     setIsSubmitting(true);
 
     try {
@@ -173,11 +179,34 @@ export const CustomerCheckout: React.FC = () => {
 
           {/* Order Snapshot Summary */}
           <div className="bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 rounded-3xl p-5 space-y-2 text-xs">
-            <div className="flex justify-between text-slate-600 dark:text-slate-400">
+            <div className="flex justify-between items-center text-slate-600 dark:text-slate-400">
               <span>Ordering Mode</span>
-              <span className="font-bold text-slate-900 dark:text-white capitalize">
-                {orderType === 'dine_in' ? `Dine-In (Table ${tableContext.tableNumber})` : 'Takeaway'}
-              </span>
+              {orderType === 'dine_in' ? (
+                tableContext.tableNumber ? (
+                  <div className="flex items-center gap-2">
+                    <span className="font-bold text-slate-900 dark:text-white">
+                      Table {tableContext.tableNumber}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => navigate('/u/customer/cart')}
+                      className="text-[10px] text-rose-600 dark:text-rose-400 font-bold hover:underline"
+                    >
+                      Change
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => navigate('/u/customer/cart')}
+                    className="text-[11px] font-bold text-rose-600 bg-rose-50 dark:bg-rose-950/40 px-2.5 py-1 rounded-lg border border-rose-200 dark:border-rose-800"
+                  >
+                    ⚠️ Choose Table ↗
+                  </button>
+                )
+              ) : (
+                <span className="font-bold text-slate-900 dark:text-white">Takeaway</span>
+              )}
             </div>
             <div className="flex justify-between text-slate-600 dark:text-slate-400">
               <span>Items Total</span>

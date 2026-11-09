@@ -114,6 +114,8 @@ export const publicApi = {
     apiRequest('/public/restaurant', {}, slug ? { slug } : undefined),
   resolveQr: (token: string, resto?: string) =>
     apiRequest(`/public/qr/resolve?t=${encodeURIComponent(token)}${resto ? `&resto=${encodeURIComponent(resto)}` : ''}`),
+  getTables: (resto?: string) =>
+    apiRequest('/public/tables', {}, resto ? { slug: resto } : undefined),
   getMenu: () =>
     apiRequest('/menu/public'),
   getReceipt: (token: string) =>

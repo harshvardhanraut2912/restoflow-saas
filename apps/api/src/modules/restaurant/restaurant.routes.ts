@@ -36,6 +36,36 @@ restaurantRouter.get('/restaurant', resolveTenant, (req: Request, res: Response)
   });
 });
 
+// Public List of Dining Tables for Customer Table Selection
+restaurantRouter.get('/tables', resolveTenant, async (req: Request, res: Response) => {
+  const restaurant = req.restaurant!;
+
+  try {
+    const result = await query(
+      `SELECT 
+        dt.id,
+        dt.table_number,
+        dt.capacity,
+        dt.status,
+        dt.is_active
+       FROM dining_tables dt
+       WHERE dt.restaurant_id = $1 AND dt.is_active = true AND dt.status != 'out_of_service'
+       ORDER BY 
+         CASE 
+           WHEN dt.table_number ~ '^[0-9]+$' THEN LPAD(dt.table_number, 10, '0')
+           WHEN dt.table_number ~ '^T-[0-9]+$' THEN LPAD(SUBSTRING(dt.table_number FROM 3), 10, '0')
+           ELSE dt.table_number 
+         END ASC`,
+      [restaurant.id]
+    );
+
+    res.json({ tables: result.rows });
+  } catch (err: any) {
+    console.error('Public fetch tables error:', err);
+    res.status(500).json({ error: 'SERVER_ERROR', message: 'Failed to fetch tables.' });
+  }
+});
+
 // Resolve Opaque QR Token (Resolves directly to its associated restaurant and table)
 restaurantRouter.get('/qr/resolve', async (req: Request, res: Response) => {
   const token = req.query.t as string;
@@ -113,6 +143,7 @@ restaurantRouter.get('/qr/resolve', async (req: Request, res: Response) => {
             OR LOWER(dt.table_number) = LOWER('T-' || LPAD($3, 2, '0'))
             OR LOWER(dt.table_number) = LOWER('T-' || $3)
             OR LOWER(dt.table_number) = LOWER('Table ' || $3)
+            OR dt.id::text = $3
           )
         ORDER BY CASE WHEN r.slug = 'royalspice' THEN 0 ELSE 1 END, r.created_at ASC
         LIMIT 1
