@@ -41,8 +41,8 @@ export async function apiRequest<T = any>(
     ...(options.headers as Record<string, string> || {})
   };
 
-  // Staff token
-  const staffToken = localStorage.getItem('staff_token');
+  // Staff token — read from sessionStorage (tab-isolated; each tab's login is independent)
+  const staffToken = sessionStorage.getItem('staff_token') || localStorage.getItem('staff_token');
   if (staffToken && !headers['Authorization']) {
     headers['Authorization'] = `Bearer ${staffToken}`;
   }

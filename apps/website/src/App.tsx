@@ -1,8 +1,9 @@
 import React from 'react';
-import { BrowserRouter, Routes, Route, Navigate, Link } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate, Link, useLocation } from 'react-router-dom';
 import { TenantProvider, useTenant } from './context/TenantContext.js';
 import { CartProvider } from './context/CartContext.js';
 import { StaffAuthProvider } from './context/StaffAuthContext.js';
+import { useStaffAuth } from './context/StaffAuthContext.js';
 import { ThemeProvider } from './context/ThemeContext.js';
 import { SuspendedNotice } from './components/SuspendedNotice.js';
 
@@ -244,6 +245,38 @@ const TenantRouteWrapper: React.FC<{ children: React.ReactNode }> = ({ children 
   return <>{children}</>;
 };
 
+// Auth Guard for Staff Routes
+const ProtectedStaffRoute: React.FC<{
+  children: React.ReactNode;
+  allowedRoles?: Array<'manager' | 'waiter' | 'kitchen'>;
+}> = ({ children, allowedRoles }) => {
+  const { isAuthenticated, isLoading, user } = useStaffAuth();
+  const location = useLocation();
+
+  if (isLoading) {
+    return (
+      <div className="min-h-screen bg-slate-950 flex items-center justify-center">
+        <div className="text-center">
+          <div className="w-12 h-12 border-2 border-rose-500 border-t-transparent rounded-full animate-spin mx-auto mb-3" />
+          <p className="text-slate-400 text-sm">Verifying session...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!isAuthenticated) {
+    return <Navigate to="/s/login" state={{ from: location }} replace />;
+  }
+
+  if (allowedRoles && user && !allowedRoles.includes(user.role)) {
+    if (user.role === 'manager') return <Navigate to="/s/manager/dashboard" replace />;
+    if (user.role === 'kitchen') return <Navigate to="/s/kitchen/dashboard" replace />;
+    return <Navigate to="/s/waiter/dashboard" replace />;
+  }
+
+  return <>{children}</>;
+};
+
 export const App: React.FC = () => {
   return (
     <TenantProvider>
@@ -272,10 +305,26 @@ export const App: React.FC = () => {
                   <Route path="/s/login" element={<StaffLogin />} />
 
                   {/* Staff Views */}
-                  <Route path="/s/kitchen/dashboard" element={<KitchenKDS />} />
-                  <Route path="/s/waiter/dashboard" element={<WaiterFloor />} />
-                  <Route path="/s/waiter/tables" element={<WaiterFloor />} />
-                  <Route path="/s/manager/*" element={<ManagerDashboard />} />
+                  <Route path="/s/kitchen/dashboard" element={
+                    <ProtectedStaffRoute allowedRoles={['kitchen', 'manager']}>
+                      <KitchenKDS />
+                    </ProtectedStaffRoute>
+                  } />
+                  <Route path="/s/waiter/dashboard" element={
+                    <ProtectedStaffRoute allowedRoles={['waiter', 'manager']}>
+                      <WaiterFloor />
+                    </ProtectedStaffRoute>
+                  } />
+                  <Route path="/s/waiter/tables" element={
+                    <ProtectedStaffRoute allowedRoles={['waiter', 'manager']}>
+                      <WaiterFloor />
+                    </ProtectedStaffRoute>
+                  } />
+                  <Route path="/s/manager/*" element={
+                    <ProtectedStaffRoute allowedRoles={['manager']}>
+                      <ManagerDashboard />
+                    </ProtectedStaffRoute>
+                  } />
 
                   {/* Catch All */}
                   <Route path="*" element={<Navigate to="/" replace />} />

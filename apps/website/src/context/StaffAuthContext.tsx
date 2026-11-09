@@ -12,12 +12,28 @@ interface StaffAuthContextType {
 
 const StaffAuthContext = createContext<StaffAuthContextType | undefined>(undefined);
 
+// ─── Tab-Isolated Staff Session Storage ───────────────────────────────────────
+// Use sessionStorage so each browser tab has its own login session.
+// Opening a new tab and logging in as Kitchen won't overwrite the Waiter tab.
+const SESSION_KEY = 'staff_token';
+const getToken = () => sessionStorage.getItem(SESSION_KEY);
+const setToken = (t: string) => sessionStorage.setItem(SESSION_KEY, t);
+const clearToken = () => sessionStorage.removeItem(SESSION_KEY);
+
 export const StaffAuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [user, setUser] = useState<StaffUser | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
-    const token = localStorage.getItem('staff_token');
+    // Also check localStorage for a backward-compat migration:
+    // If old token exists in localStorage, move it to sessionStorage for this tab
+    const legacyToken = localStorage.getItem('staff_token');
+    if (legacyToken && !getToken()) {
+      setToken(legacyToken);
+      localStorage.removeItem('staff_token');
+    }
+
+    const token = getToken();
     if (!token) {
       setIsLoading(false);
       return;
@@ -28,7 +44,7 @@ export const StaffAuthProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         setUser(data.user);
       })
       .catch(() => {
-        localStorage.removeItem('staff_token');
+        clearToken();
         setUser(null);
       })
       .finally(() => {
@@ -38,13 +54,14 @@ export const StaffAuthProvider: React.FC<{ children: React.ReactNode }> = ({ chi
 
   const login = async (email: string, password: string): Promise<StaffUser> => {
     const res = await staffAuthApi.login(email, password);
-    localStorage.setItem('staff_token', res.token);
+    // Store in sessionStorage (tab-isolated), NOT localStorage (shared across tabs)
+    setToken(res.token);
     setUser(res.user);
     return res.user;
   };
 
   const logout = () => {
-    localStorage.removeItem('staff_token');
+    clearToken();
     setUser(null);
     window.location.href = '/s/login';
   };

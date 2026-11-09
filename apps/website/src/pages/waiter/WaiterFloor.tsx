@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { 
   Users, 
   Utensils, 
@@ -14,7 +15,7 @@ import {
   QrCode,
   X
 } from 'lucide-react';
-import { waiterApi, publicApi } from '../../services/api.js';
+import { waiterApi, publicApi, ApiError } from '../../services/api.js';
 import { useStaffAuth } from '../../context/StaffAuthContext.js';
 import { useTenant } from '../../context/TenantContext.js';
 import { ThemeToggle } from '../../components/ThemeToggle.js';
@@ -22,6 +23,7 @@ import { ThemeToggle } from '../../components/ThemeToggle.js';
 export const WaiterFloor: React.FC = () => {
   const { user, logout } = useStaffAuth();
   const { restaurant } = useTenant();
+  const navigate = useNavigate();
 
   const [activeTab, setActiveTab] = useState<'tables' | 'serve' | 'orders' | 'requests'>('tables');
   const [tables, setTables] = useState<any[]>([]);
@@ -58,7 +60,11 @@ export const WaiterFloor: React.FC = () => {
       setTables(tData.tables || []);
       setActiveOrders(oData.orders || []);
       setServiceRequests(rData.requests || []);
-    } catch (err) {
+    } catch (err: any) {
+      if (err?.status === 401 || err?.status === 403) {
+        navigate('/s/login');
+        return;
+      }
       console.error('Failed to load floor data:', err);
     } finally {
       setIsLoading(false);
@@ -174,28 +180,39 @@ export const WaiterFloor: React.FC = () => {
     }
   };
 
+  if (isLoading) {
+    return (
+      <div className="min-h-screen bg-slate-100 dark:bg-slate-900 flex items-center justify-center">
+        <div className="text-center">
+          <div className="w-12 h-12 border-2 border-rose-500 border-t-transparent rounded-full animate-spin mx-auto mb-4" />
+          <p className="text-slate-500 dark:text-slate-400 text-sm">Loading floor data...</p>
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div className="min-h-screen bg-slate-900 text-slate-100 flex flex-col font-sans select-none pb-12">
+    <div className="min-h-screen bg-slate-100 dark:bg-slate-900 text-slate-900 dark:text-slate-100 flex flex-col font-sans select-none pb-12">
       {/* Top Header */}
-      <header className="h-16 bg-slate-950 border-b border-slate-800 px-6 flex items-center justify-between shrink-0">
+      <header className="h-16 bg-white dark:bg-slate-950 border-b border-slate-200 dark:border-slate-800 px-6 flex items-center justify-between shrink-0">
         <div className="flex items-center gap-3">
           <div className="w-10 h-10 rounded-xl bg-rose-600/10 border border-rose-500/20 text-rose-500 flex items-center justify-center font-bold">
             <Users className="w-5 h-5" />
           </div>
           <div>
-            <h1 className="text-base font-bold text-white flex items-center gap-2">
+            <h1 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
               {restaurant?.name || 'Restaurant'} Floor Control
             </h1>
-            <p className="text-xs text-slate-400">Floor Captain: {user?.fullName || 'Staff'}</p>
+            <p className="text-xs text-slate-500 dark:text-slate-400">Floor Captain: {user?.fullName || 'Staff'}</p>
           </div>
         </div>
 
         {/* Navigation Tabs */}
-        <div className="flex items-center gap-1.5 bg-slate-900 p-1 rounded-2xl border border-slate-800">
+        <div className="flex items-center gap-1.5 bg-slate-100 dark:bg-slate-900 p-1 rounded-2xl border border-slate-200 dark:border-slate-800">
           <button
             onClick={() => setActiveTab('tables')}
             className={`px-3 sm:px-4 py-1.5 rounded-xl text-xs font-semibold transition-all ${
-              activeTab === 'tables' ? 'bg-rose-600 text-white shadow-md' : 'text-slate-400 hover:text-white'
+              activeTab === 'tables' ? 'bg-rose-600 text-white shadow-md' : 'text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
             }`}
           >
             Dining Tables ({tables.length})
@@ -203,7 +220,7 @@ export const WaiterFloor: React.FC = () => {
           <button
             onClick={() => setActiveTab('serve')}
             className={`px-3 sm:px-4 py-1.5 rounded-xl text-xs font-semibold transition-all relative flex items-center gap-1.5 ${
-              activeTab === 'serve' ? 'bg-emerald-600 text-white shadow-md' : 'text-slate-400 hover:text-white'
+              activeTab === 'serve' ? 'bg-emerald-600 text-white shadow-md' : 'text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
             }`}
           >
             Serve Order ({readyOrders.length})
@@ -217,7 +234,7 @@ export const WaiterFloor: React.FC = () => {
           <button
             onClick={() => setActiveTab('orders')}
             className={`px-3 sm:px-4 py-1.5 rounded-xl text-xs font-semibold transition-all ${
-              activeTab === 'orders' ? 'bg-rose-600 text-white shadow-md' : 'text-slate-400 hover:text-white'
+              activeTab === 'orders' ? 'bg-rose-600 text-white shadow-md' : 'text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
             }`}
           >
             Active Orders ({activeOrders.length})
@@ -225,7 +242,7 @@ export const WaiterFloor: React.FC = () => {
           <button
             onClick={() => setActiveTab('requests')}
             className={`px-3 sm:px-4 py-1.5 rounded-xl text-xs font-semibold transition-all relative ${
-              activeTab === 'requests' ? 'bg-rose-600 text-white shadow-md' : 'text-slate-400 hover:text-white'
+              activeTab === 'requests' ? 'bg-rose-600 text-white shadow-md' : 'text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
             }`}
           >
             Service Requests ({serviceRequests.length})
@@ -239,7 +256,7 @@ export const WaiterFloor: React.FC = () => {
           <ThemeToggle />
           <button
             onClick={logout}
-            className="p-2.5 rounded-xl border border-slate-700 dark:border-slate-800 text-slate-400 hover:text-white hover:bg-slate-800"
+            className="p-2.5 rounded-xl border border-slate-200 dark:border-slate-800 text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800"
             title="Sign out"
           >
             <LogOut className="w-4 h-4" />
@@ -254,10 +271,10 @@ export const WaiterFloor: React.FC = () => {
           <div className="space-y-6">
             <div className="flex items-center justify-between">
               <div>
-                <h2 className="text-base font-bold text-white">Live Floor Table Map</h2>
-                <p className="text-xs text-slate-400">Tap a table to view running session, add items, or settle bill</p>
+                <h2 className="text-base font-bold text-slate-900 dark:text-white">Live Floor Table Map</h2>
+                <p className="text-xs text-slate-500 dark:text-slate-400">Tap a table to view running session, add items, or settle bill</p>
               </div>
-              <div className="flex items-center gap-4 text-xs">
+              <div className="flex items-center gap-4 text-xs text-slate-600 dark:text-slate-400">
                 <span className="flex items-center gap-1.5">
                   <span className="w-3 h-3 rounded-md bg-emerald-500"></span> Available
                 </span>
@@ -285,14 +302,14 @@ export const WaiterFloor: React.FC = () => {
                         : ''
                     } ${
                       isBillRequested
-                        ? 'bg-indigo-950/40 border-indigo-500/80'
+                        ? 'bg-indigo-50 dark:bg-indigo-950/40 border-indigo-500/80'
                         : isOccupied
-                        ? 'bg-amber-950/30 border-amber-500/60'
-                        : 'bg-slate-950/60 border-slate-800 hover:border-slate-700'
+                        ? 'bg-amber-50 dark:bg-amber-950/30 border-amber-500/60'
+                        : 'bg-white dark:bg-slate-950/60 border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700'
                     }`}
                   >
                     <div className="flex items-center justify-between w-full mb-3">
-                      <span className="text-xl font-black text-white">
+                      <span className="text-xl font-black text-slate-900 dark:text-white">
                         Table {table.table_number}
                       </span>
                       <span className={`w-2.5 h-2.5 rounded-full ${
@@ -300,9 +317,9 @@ export const WaiterFloor: React.FC = () => {
                       }`} />
                     </div>
 
-                    <div className="space-y-1 text-xs text-slate-400">
+                    <div className="space-y-1 text-xs text-slate-500 dark:text-slate-400">
                       <div>Capacity: {table.capacity} Guests</div>
-                      <div className={`font-semibold ${isOccupied ? 'text-amber-400' : 'text-emerald-400'}`}>
+                      <div className={`font-semibold ${isOccupied ? 'text-amber-500 dark:text-amber-400' : 'text-emerald-500 dark:text-emerald-400'}`}>
                         {isBillRequested ? 'Bill Requested' : isOccupied ? 'Dining in Progress' : 'Empty / Available'}
                       </div>
                     </div>
@@ -318,46 +335,46 @@ export const WaiterFloor: React.FC = () => {
           <div className="space-y-6">
             <div className="flex items-center justify-between">
               <div>
-                <h2 className="text-base font-bold text-white flex items-center gap-2">
+                <h2 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
                   Ready to Serve ({readyOrders.length})
                   {readyOrders.length > 0 && (
-                    <span className="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 animate-pulse">
-                      Hot & Prepared
+                    <span className="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30 animate-pulse">
+                      Hot &amp; Prepared
                     </span>
                   )}
                 </h2>
-                <p className="text-xs text-slate-400">Fresh dishes prepared by kitchen awaiting table delivery</p>
+                <p className="text-xs text-slate-500 dark:text-slate-400">Fresh dishes prepared by kitchen awaiting table delivery</p>
               </div>
             </div>
 
             {readyOrders.length === 0 ? (
-              <div className="py-20 text-center rounded-3xl bg-slate-950/40 border border-slate-800">
-                <Utensils className="w-12 h-12 text-slate-600 mx-auto mb-3" />
-                <h3 className="text-sm font-bold text-slate-300">All Dishes Served</h3>
-                <p className="text-xs text-slate-500 mt-1">When the kitchen marks orders 'Ready', they will blink in green here.</p>
+              <div className="py-20 text-center rounded-3xl bg-slate-50 dark:bg-slate-950/40 border border-slate-200 dark:border-slate-800">
+                <Utensils className="w-12 h-12 text-slate-300 dark:text-slate-600 mx-auto mb-3" />
+                <h3 className="text-sm font-bold text-slate-500 dark:text-slate-300">All Dishes Served</h3>
+                <p className="text-xs text-slate-400 dark:text-slate-500 mt-1">When the kitchen marks orders 'Ready', they will blink in green here.</p>
               </div>
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                 {readyOrders.map((o) => (
                   <div
                     key={o.id}
-                    className="rounded-3xl p-6 bg-slate-950 border-2 border-emerald-500 shadow-xl shadow-emerald-500/20 flex flex-col justify-between space-y-4 animate-pulse relative overflow-hidden ring-2 ring-emerald-400/50"
+                    className="rounded-3xl p-6 bg-white dark:bg-slate-950 border-2 border-emerald-500 shadow-xl shadow-emerald-500/20 flex flex-col justify-between space-y-4 animate-pulse relative overflow-hidden ring-2 ring-emerald-400/50"
                   >
                     {/* Glowing Accent Top Bar */}
                     <div className="absolute top-0 left-0 right-0 h-1.5 bg-gradient-to-r from-emerald-500 via-emerald-400 to-teal-400"></div>
 
                     <div>
                       {/* Table & Order Header */}
-                      <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+                      <div className="flex items-center justify-between pb-3 border-b border-slate-200 dark:border-slate-800">
                         <div>
-                          <div className="text-2xl font-black text-white flex items-center gap-2">
+                          <div className="text-2xl font-black text-slate-900 dark:text-white flex items-center gap-2">
                             {o.table_number ? `Table ${o.table_number}` : 'Takeaway'}
                           </div>
-                          <div className="text-xs text-slate-400 font-mono mt-0.5">Order #{o.order_number}</div>
+                          <div className="text-xs text-slate-500 dark:text-slate-400 font-mono mt-0.5">Order #{o.order_number}</div>
                         </div>
 
-                        {/* Blinking Green Badge saying 'Ready to Serve' */}
-                        <div className="px-3 py-1.5 rounded-xl bg-emerald-500/20 border border-emerald-400 text-emerald-300 text-xs font-black tracking-wider uppercase flex items-center gap-1.5 shadow-md shadow-emerald-500/30 animate-pulse">
+                        {/* Blinking Green Badge */}
+                        <div className="px-3 py-1.5 rounded-xl bg-emerald-500/20 border border-emerald-400 text-emerald-700 dark:text-emerald-300 text-xs font-black tracking-wider uppercase flex items-center gap-1.5 shadow-md shadow-emerald-500/30 animate-pulse">
                           <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-ping"></span>
                           Ready to Serve
                         </div>
@@ -365,29 +382,29 @@ export const WaiterFloor: React.FC = () => {
 
                       {/* Dishes List */}
                       <div className="mt-4 space-y-2">
-                        <div className="text-[11px] font-bold uppercase tracking-wider text-slate-400">
+                        <div className="text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
                           Items to Deliver:
                         </div>
                         <div className="space-y-1.5 max-h-48 overflow-y-auto pr-1">
                           {o.items && o.items.length > 0 ? (
                             o.items.map((item: any, idx: number) => (
-                              <div key={idx} className="flex items-center justify-between text-xs py-1.5 px-3 rounded-xl bg-slate-900 border border-slate-800">
-                                <span className="font-semibold text-white">
+                              <div key={idx} className="flex items-center justify-between text-xs py-1.5 px-3 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800">
+                                <span className="font-semibold text-slate-900 dark:text-white">
                                   {item.quantity}x {item.name}
                                 </span>
                                 {item.variant && (
-                                  <span className="text-[10px] text-slate-400">({item.variant})</span>
+                                  <span className="text-[10px] text-slate-500 dark:text-slate-400">({item.variant})</span>
                                 )}
                               </div>
                             ))
                           ) : (
-                            <div className="text-xs text-slate-400 italic">Dishes prepared & hot</div>
+                            <div className="text-xs text-slate-400 italic">Dishes prepared &amp; hot</div>
                           )}
                         </div>
                       </div>
 
                       {o.notes && (
-                        <div className="mt-3 p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/20 text-amber-300 text-[11px]">
+                        <div className="mt-3 p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/20 text-amber-700 dark:text-amber-300 text-[11px]">
                           Note: {o.notes}
                         </div>
                       )}
@@ -411,23 +428,23 @@ export const WaiterFloor: React.FC = () => {
         {/* TAB 3: ACTIVE ORDERS */}
         {activeTab === 'orders' && (
           <div className="space-y-4">
-            <h2 className="text-base font-bold text-white">Floor Orders Timeline</h2>
-            <div className="bg-slate-950 border border-slate-800 rounded-3xl overflow-hidden divide-y divide-slate-800">
+            <h2 className="text-base font-bold text-slate-900 dark:text-white">Floor Orders Timeline</h2>
+            <div className="bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-3xl overflow-hidden divide-y divide-slate-100 dark:divide-slate-800">
               {activeOrders.map((o) => (
-                <div key={o.id} className="p-4 flex items-center justify-between text-xs hover:bg-slate-900/40">
+                <div key={o.id} className="p-4 flex items-center justify-between text-xs hover:bg-slate-50 dark:hover:bg-slate-900/40">
                   <div className="space-y-1">
                     <div className="flex items-center gap-2">
-                      <span className="font-bold text-white text-sm">{o.order_number}</span>
-                      <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-slate-800 text-slate-300">
+                      <span className="font-bold text-slate-900 dark:text-white text-sm">{o.order_number}</span>
+                      <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300">
                         {o.order_type === 'dine_in' ? `Table ${o.table_number}` : 'Takeaway'}
                       </span>
                     </div>
-                    <div className="text-slate-400">Customer: {o.customer_name || o.customer_phone_snapshot}</div>
+                    <div className="text-slate-500 dark:text-slate-400">Customer: {o.customer_name || o.customer_phone_snapshot}</div>
                   </div>
 
                   <div className="text-right space-y-1">
-                    <div className="font-bold text-white text-sm">₹{(o.subtotal_paise / 100).toFixed(0)}</div>
-                    <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider bg-rose-500/10 text-rose-400 border border-rose-500/20">
+                    <div className="font-bold text-slate-900 dark:text-white text-sm">₹{(o.subtotal_paise / 100).toFixed(0)}</div>
+                    <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider bg-rose-500/10 text-rose-500 dark:text-rose-400 border border-rose-500/20">
                       {o.status}
                     </span>
                   </div>
@@ -437,24 +454,24 @@ export const WaiterFloor: React.FC = () => {
           </div>
         )}
 
-        {/* TAB 3: SERVICE REQUESTS */}
+        {/* TAB 4: SERVICE REQUESTS */}
         {activeTab === 'requests' && (
           <div className="space-y-4">
-            <h2 className="text-base font-bold text-white">Guest Service Requests</h2>
+            <h2 className="text-base font-bold text-slate-900 dark:text-white">Guest Service Requests</h2>
             {serviceRequests.length === 0 ? (
-              <div className="py-16 text-center text-slate-500 text-xs">
+              <div className="py-16 text-center text-slate-400 dark:text-slate-500 text-xs">
                 No active service requests from guests.
               </div>
             ) : (
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
                 {serviceRequests.map((req) => (
-                  <div key={req.id} className="p-5 rounded-2xl bg-slate-950 border border-amber-500/40 flex items-center justify-between">
+                  <div key={req.id} className="p-5 rounded-2xl bg-white dark:bg-slate-950 border border-amber-500/40 flex items-center justify-between">
                     <div>
-                      <div className="text-base font-black text-white">Table {req.table_number}</div>
-                      <div className="text-xs font-semibold text-amber-400 uppercase mt-0.5">
+                      <div className="text-base font-black text-slate-900 dark:text-white">Table {req.table_number}</div>
+                      <div className="text-xs font-semibold text-amber-600 dark:text-amber-400 uppercase mt-0.5">
                         {req.request_type} requested
                       </div>
-                      <div className="text-[11px] text-slate-500 mt-1">
+                      <div className="text-[11px] text-slate-400 dark:text-slate-500 mt-1">
                         {new Date(req.created_at).toLocaleTimeString()}
                       </div>
                     </div>
@@ -475,16 +492,16 @@ export const WaiterFloor: React.FC = () => {
 
       {/* Selected Table Drawer */}
       {selectedTable && (
-        <div className="fixed inset-y-0 right-0 w-full sm:w-96 bg-slate-950 border-l border-slate-800 p-6 shadow-2xl flex flex-col justify-between z-50">
+        <div className="fixed inset-y-0 right-0 w-full sm:w-96 bg-white dark:bg-slate-950 border-l border-slate-200 dark:border-slate-800 p-6 shadow-2xl flex flex-col justify-between z-50">
           <div>
-            <div className="flex items-center justify-between pb-4 border-b border-slate-800 mb-5">
+            <div className="flex items-center justify-between pb-4 border-b border-slate-200 dark:border-slate-800 mb-5">
               <div>
-                <h3 className="text-lg font-bold text-white">Table {selectedTable.table_number}</h3>
-                <p className="text-xs text-slate-400">Capacity: {selectedTable.capacity} Guests</p>
+                <h3 className="text-lg font-bold text-slate-900 dark:text-white">Table {selectedTable.table_number}</h3>
+                <p className="text-xs text-slate-500 dark:text-slate-400">Capacity: {selectedTable.capacity} Guests</p>
               </div>
               <button
                 onClick={() => setSelectedTable(null)}
-                className="text-slate-400 hover:text-white"
+                className="text-slate-400 hover:text-slate-900 dark:hover:text-white"
               >
                 <X className="w-5 h-5" />
               </button>
@@ -493,20 +510,20 @@ export const WaiterFloor: React.FC = () => {
             {/* Session Summary */}
             {sessionBill ? (
               <div className="space-y-4">
-                <div className="text-xs font-bold uppercase tracking-wider text-slate-400">
+                <div className="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
                   Active Session Dishes ({sessionBill.items?.length || 0})
                 </div>
 
                 <div className="space-y-2 max-h-64 overflow-y-auto pr-1 text-xs">
                   {sessionBill.items?.map((item: any) => (
-                    <div key={item.id} className="flex justify-between py-1.5 border-b border-slate-800/80">
-                      <span>{item.quantity}x {item.name_snapshot}</span>
-                      <span className="font-bold text-white">₹{(item.total_price_paise / 100).toFixed(0)}</span>
+                    <div key={item.id} className="flex justify-between py-1.5 border-b border-slate-100 dark:border-slate-800/80">
+                      <span className="text-slate-700 dark:text-slate-300">{item.quantity}x {item.name_snapshot}</span>
+                      <span className="font-bold text-slate-900 dark:text-white">₹{(item.total_price_paise / 100).toFixed(0)}</span>
                     </div>
                   ))}
                 </div>
 
-                <div className="pt-3 border-t border-slate-800 space-y-1.5 text-xs text-slate-400">
+                <div className="pt-3 border-t border-slate-200 dark:border-slate-800 space-y-1.5 text-xs text-slate-500 dark:text-slate-400">
                   <div className="flex justify-between">
                     <span>Subtotal</span>
                     <span>₹{(sessionBill.subtotal_paise / 100).toFixed(2)}</span>
@@ -515,28 +532,28 @@ export const WaiterFloor: React.FC = () => {
                     <span>GST Tax</span>
                     <span>₹{(sessionBill.tax_paise / 100).toFixed(2)}</span>
                   </div>
-                  <div className="flex justify-between font-bold text-base text-white pt-2 border-t border-slate-800">
+                  <div className="flex justify-between font-bold text-base text-slate-900 dark:text-white pt-2 border-t border-slate-200 dark:border-slate-800">
                     <span>Total Bill</span>
-                    <span className="text-rose-400">₹{(sessionBill.grand_total_paise / 100).toFixed(2)}</span>
+                    <span className="text-rose-500 dark:text-rose-400">₹{(sessionBill.grand_total_paise / 100).toFixed(2)}</span>
                   </div>
                 </div>
               </div>
             ) : (
               <div className="py-12 text-center text-slate-400 text-xs space-y-2">
-                <div className="w-12 h-12 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 flex items-center justify-center mx-auto mb-2">
+                <div className="w-12 h-12 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-500 flex items-center justify-center mx-auto mb-2">
                   <CheckCircle className="w-6 h-6" />
                 </div>
-                <div className="font-bold text-white text-sm">Table {selectedTable.table_number} is Empty</div>
-                <p className="text-slate-500 text-[11px]">This table is unoccupied and ready for new guests.</p>
+                <div className="font-bold text-slate-900 dark:text-white text-sm">Table {selectedTable.table_number} is Empty</div>
+                <p className="text-slate-400 dark:text-slate-500 text-[11px]">This table is unoccupied and ready for new guests.</p>
               </div>
             )}
           </div>
 
           {/* Drawer Actions */}
-          <div className="space-y-3 pt-6 border-t border-slate-800">
+          <div className="space-y-3 pt-6 border-t border-slate-200 dark:border-slate-800">
             <button
               onClick={handleOpenPOS}
-              className="w-full bg-slate-800 hover:bg-slate-700 text-white font-bold py-3.5 rounded-xl text-xs flex items-center justify-center gap-2"
+              className="w-full bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-900 dark:text-white font-bold py-3.5 rounded-xl text-xs flex items-center justify-center gap-2"
             >
               <Plus className="w-4 h-4" />
               Add Items (Manual Order)
@@ -548,7 +565,7 @@ export const WaiterFloor: React.FC = () => {
                 className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-black py-3.5 rounded-xl text-xs flex items-center justify-center gap-2 shadow-lg shadow-emerald-900/30"
               >
                 <DollarSign className="w-4 h-4" />
-                Payment (Collect & Mark 'Paid')
+                Payment (Collect &amp; Mark 'Paid')
               </button>
             )}
           </div>
@@ -558,14 +575,14 @@ export const WaiterFloor: React.FC = () => {
       {/* Settle Bill Modal */}
       {isSettlingBill && (
         <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-800 rounded-3xl max-w-sm w-full p-6 shadow-2xl">
-            <h3 className="text-base font-bold text-white mb-1">
+          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl max-w-sm w-full p-6 shadow-2xl">
+            <h3 className="text-base font-bold text-slate-900 dark:text-white mb-1">
               Table {selectedTable?.table_number} Bill Payment
             </h3>
-            <p className="text-xs text-slate-400 mb-4">Total Amount: ₹{((sessionBill?.grand_total_paise || 0) / 100).toFixed(2)}</p>
+            <p className="text-xs text-slate-500 dark:text-slate-400 mb-4">Total Amount: ₹{((sessionBill?.grand_total_paise || 0) / 100).toFixed(2)}</p>
 
             <div className="space-y-3 mb-6">
-              <label className="block text-xs font-semibold text-slate-300 uppercase tracking-wider">
+              <label className="block text-xs font-semibold text-slate-600 dark:text-slate-300 uppercase tracking-wider">
                 Select Payment Method
               </label>
               <div className="grid grid-cols-3 gap-2 text-xs font-semibold">
@@ -573,7 +590,7 @@ export const WaiterFloor: React.FC = () => {
                   type="button"
                   onClick={() => setPaymentMethod('cash')}
                   className={`p-3 rounded-xl border flex flex-col items-center gap-1.5 ${
-                    paymentMethod === 'cash' ? 'border-emerald-500 bg-emerald-500/10 text-emerald-400' : 'border-slate-800 text-slate-400'
+                    paymentMethod === 'cash' ? 'border-emerald-500 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400' : 'border-slate-200 dark:border-slate-800 text-slate-500 dark:text-slate-400'
                   }`}
                 >
                   <DollarSign className="w-4 h-4" />
@@ -583,7 +600,7 @@ export const WaiterFloor: React.FC = () => {
                   type="button"
                   onClick={() => setPaymentMethod('upi_qr')}
                   className={`p-3 rounded-xl border flex flex-col items-center gap-1.5 ${
-                    paymentMethod === 'upi_qr' ? 'border-emerald-500 bg-emerald-500/10 text-emerald-400' : 'border-slate-800 text-slate-400'
+                    paymentMethod === 'upi_qr' ? 'border-emerald-500 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400' : 'border-slate-200 dark:border-slate-800 text-slate-500 dark:text-slate-400'
                   }`}
                 >
                   <QrCode className="w-4 h-4" />
@@ -593,7 +610,7 @@ export const WaiterFloor: React.FC = () => {
                   type="button"
                   onClick={() => setPaymentMethod('card')}
                   className={`p-3 rounded-xl border flex flex-col items-center gap-1.5 ${
-                    paymentMethod === 'card' ? 'border-emerald-500 bg-emerald-500/10 text-emerald-400' : 'border-slate-800 text-slate-400'
+                    paymentMethod === 'card' ? 'border-emerald-500 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400' : 'border-slate-200 dark:border-slate-800 text-slate-500 dark:text-slate-400'
                   }`}
                 >
                   <CreditCard className="w-4 h-4" />
@@ -605,7 +622,7 @@ export const WaiterFloor: React.FC = () => {
             <div className="flex items-center justify-end gap-3">
               <button
                 onClick={() => setIsSettlingBill(false)}
-                className="px-4 py-2.5 rounded-xl border border-slate-800 text-slate-300 text-xs font-semibold"
+                className="px-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-300 text-xs font-semibold"
               >
                 Cancel
               </button>
@@ -624,13 +641,13 @@ export const WaiterFloor: React.FC = () => {
       {/* Manual Order POS Modal */}
       {isOrderingOpen && (
         <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-800 rounded-3xl max-w-2xl w-full p-6 shadow-2xl max-h-[85vh] flex flex-col">
-            <div className="flex items-center justify-between pb-4 border-b border-slate-800 mb-4">
+          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl max-w-2xl w-full p-6 shadow-2xl max-h-[85vh] flex flex-col">
+            <div className="flex items-center justify-between pb-4 border-b border-slate-200 dark:border-slate-800 mb-4">
               <div>
-                <h3 className="text-base font-bold text-white">Manual POS Order</h3>
-                <p className="text-xs text-slate-400">Add dishes to Table {selectedTable?.table_number}</p>
+                <h3 className="text-base font-bold text-slate-900 dark:text-white">Manual POS Order</h3>
+                <p className="text-xs text-slate-500 dark:text-slate-400">Add dishes to Table {selectedTable?.table_number}</p>
               </div>
-              <button onClick={() => setIsOrderingOpen(false)} className="text-slate-400 hover:text-white">
+              <button onClick={() => setIsOrderingOpen(false)} className="text-slate-400 hover:text-slate-900 dark:hover:text-white">
                 <X className="w-5 h-5" />
               </button>
             </div>
@@ -638,18 +655,18 @@ export const WaiterFloor: React.FC = () => {
             <div className="grid grid-cols-2 gap-4 flex-1 overflow-y-auto mb-4">
               {/* Menu Column */}
               <div className="space-y-3 overflow-y-auto pr-2">
-                <div className="text-xs font-bold text-slate-400 uppercase">Available Menu</div>
+                <div className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase">Available Menu</div>
                 {menuCategories.map((cat) => (
                   <div key={cat.id} className="space-y-1">
-                    <div className="text-xs font-bold text-white">{cat.name}</div>
+                    <div className="text-xs font-bold text-slate-900 dark:text-white">{cat.name}</div>
                     {cat.items.map((item: any) => (
                       <button
                         key={item.id}
                         onClick={() => handleAddPosItem(item)}
-                        className="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-800 hover:border-slate-700 text-left flex items-center justify-between text-xs transition-colors"
+                        className="w-full p-2.5 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700 text-left flex items-center justify-between text-xs transition-colors"
                       >
-                        <span className="font-semibold">{item.name}</span>
-                        <span className="font-bold text-rose-400">₹{(item.base_price_paise / 100).toFixed(0)}</span>
+                        <span className="font-semibold text-slate-900 dark:text-white">{item.name}</span>
+                        <span className="font-bold text-rose-500 dark:text-rose-400">₹{(item.base_price_paise / 100).toFixed(0)}</span>
                       </button>
                     ))}
                   </div>
@@ -657,31 +674,31 @@ export const WaiterFloor: React.FC = () => {
               </div>
 
               {/* Selected Items Column */}
-              <div className="bg-slate-950 rounded-2xl p-4 border border-slate-800 flex flex-col justify-between">
+              <div className="bg-slate-50 dark:bg-slate-950 rounded-2xl p-4 border border-slate-200 dark:border-slate-800 flex flex-col justify-between">
                 <div>
-                  <div className="text-xs font-bold text-slate-400 uppercase mb-3">Order Basket</div>
+                  <div className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase mb-3">Order Basket</div>
                   {orderItems.length === 0 ? (
-                    <div className="py-8 text-center text-slate-600 text-xs">Tap dishes to add</div>
+                    <div className="py-8 text-center text-slate-400 dark:text-slate-600 text-xs">Tap dishes to add</div>
                   ) : (
                     <div className="space-y-2 max-h-48 overflow-y-auto">
                       {orderItems.map((o, idx) => (
-                        <div key={idx} className="flex justify-between items-center text-xs">
+                        <div key={idx} className="flex justify-between items-center text-xs text-slate-700 dark:text-slate-300">
                           <span>{o.quantity}x {o.menuItem.name}</span>
-                          <span className="font-bold">₹{((o.menuItem.base_price_paise * o.quantity) / 100).toFixed(0)}</span>
+                          <span className="font-bold text-slate-900 dark:text-white">₹{((o.menuItem.base_price_paise * o.quantity) / 100).toFixed(0)}</span>
                         </div>
                       ))}
                     </div>
                   )}
                 </div>
 
-                <div className="pt-3 border-t border-slate-800 space-y-3">
+                <div className="pt-3 border-t border-slate-200 dark:border-slate-800 space-y-3">
                   <div>
-                    <label className="block text-[11px] font-semibold text-slate-400 mb-1">Customer Mobile</label>
+                    <label className="block text-[11px] font-semibold text-slate-500 dark:text-slate-400 mb-1">Customer Mobile</label>
                     <input
                       type="tel"
                       value={customerPhone}
                       onChange={(e) => setCustomerPhone(e.target.value)}
-                      className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white"
+                      className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl px-3 py-2 text-xs text-slate-900 dark:text-white"
                     />
                   </div>
 

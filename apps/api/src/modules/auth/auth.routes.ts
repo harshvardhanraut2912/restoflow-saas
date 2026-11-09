@@ -87,8 +87,14 @@ authRouter.get('/me', resolveTenant, requireStaff(), async (req: Request, res: R
     }
 
     res.json({
-      user: result.rows[0],
-      restaurant: req.restaurant
+      user: {
+        id: result.rows[0].id,
+        restaurantId: result.rows[0].restaurant_id,
+        restaurantName: req.restaurant?.name || '',
+        email: result.rows[0].email,
+        fullName: result.rows[0].full_name,
+        role: result.rows[0].role
+      }
     });
   } catch (err: any) {
     console.error('Staff me error:', err);
