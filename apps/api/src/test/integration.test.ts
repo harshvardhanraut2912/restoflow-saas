@@ -1,3 +1,4 @@
+process.env.IS_TEST = 'true';
 import assert from 'assert';
 import http from 'http';
 import app from '../index.js';

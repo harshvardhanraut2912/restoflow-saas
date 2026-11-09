@@ -245,7 +245,7 @@ billingRouter.post('/payments', resolveTenant, requireStaff(['waiter', 'manager'
 
         // If linked to table session, close session and free table
         if (bill.table_session_id) {
-          const sessionRes = await client.query(`UPDATE table_sessions SET status = 'settled', closed_at = now() WHERE id = $1 RETURNING table_id`, [bill.table_session_id]);
+          const sessionRes = await client.query(`UPDATE table_sessions SET status = 'closed', closed_at = now() WHERE id = $1 RETURNING table_id`, [bill.table_session_id]);
           if (sessionRes.rows.length > 0) {
             await client.query(`UPDATE dining_tables SET status = 'available' WHERE id = $1`, [sessionRes.rows[0].table_id]);
           }

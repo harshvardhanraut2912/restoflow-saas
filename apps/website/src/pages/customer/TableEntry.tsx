@@ -26,6 +26,11 @@ export const TableEntry: React.FC = () => {
     publicApi.resolveQr(token)
       .then((data) => {
         setTableData(data);
+        // Automatically sync active tenant to the QR code's restaurant
+        if (data.restaurant?.slug) {
+          localStorage.setItem('active_tenant_slug', data.restaurant.slug);
+          localStorage.setItem('active_tenant_id', data.restaurant.id);
+        }
         setTableContext({
           tableId: data.table.id,
           tableNumber: data.table.table_number,

@@ -36,10 +36,9 @@ restaurantRouter.get('/restaurant', resolveTenant, (req: Request, res: Response)
   });
 });
 
-// Resolve Opaque QR Token
-restaurantRouter.get('/qr/resolve', resolveTenant, async (req: Request, res: Response) => {
+// Resolve Opaque QR Token (Resolves directly to its associated restaurant and table)
+restaurantRouter.get('/qr/resolve', async (req: Request, res: Response) => {
   const token = req.query.t as string;
-  const restaurant = req.restaurant!;
 
   if (!token) {
     res.status(400).json({ error: 'MISSING_TOKEN', message: 'Valid opaque QR token is required.' });
@@ -50,11 +49,23 @@ restaurantRouter.get('/qr/resolve', resolveTenant, async (req: Request, res: Res
     const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
 
     const qrResult = await query(
-      `SELECT qt.*, dt.table_number, dt.capacity, dt.status as table_status, dt.is_active as table_active
+      `SELECT 
+        qt.*, 
+        dt.table_number, 
+        dt.capacity, 
+        dt.status as table_status, 
+        dt.is_active as table_active,
+        r.id as restaurant_id,
+        r.name as restaurant_name,
+        r.slug as restaurant_slug,
+        r.logo_url as restaurant_logo_url,
+        r.primary_color as restaurant_primary_color,
+        r.status as restaurant_status
        FROM table_qr_tokens qt
        JOIN dining_tables dt ON dt.id = qt.table_id
-       WHERE qt.token_hash = $1 AND qt.restaurant_id = $2 AND qt.is_revoked = false`,
-      [tokenHash, restaurant.id]
+       JOIN restaurants r ON r.id = qt.restaurant_id
+       WHERE qt.token_hash = $1 AND qt.is_revoked = false`,
+      [tokenHash]
     );
 
     if (qrResult.rows.length === 0) {
@@ -63,6 +74,14 @@ restaurantRouter.get('/qr/resolve', resolveTenant, async (req: Request, res: Res
     }
 
     const qr = qrResult.rows[0];
+
+    if (qr.restaurant_status === 'suspended') {
+      res.status(403).json({
+        error: 'RESTAURANT_SUSPENDED',
+        message: `Service for "${qr.restaurant_name}" is temporarily suspended.`
+      });
+      return;
+    }
 
     if (!qr.table_active || qr.table_status === 'out_of_service') {
       res.status(403).json({ error: 'TABLE_UNAVAILABLE', message: 'This table is currently unavailable for ordering.' });
@@ -73,17 +92,24 @@ restaurantRouter.get('/qr/resolve', resolveTenant, async (req: Request, res: Res
     const session = await withTransaction(async (client) => {
       let activeSession = await client.query(
         `SELECT * FROM table_sessions 
-         WHERE restaurant_id = $1 AND table_id = $2 AND status != 'closed'
+         WHERE restaurant_id = $1 AND table_id = $2 AND status IN ('open', 'bill_requested', 'bill_generated')
          ORDER BY opened_at DESC LIMIT 1`,
-        [restaurant.id, qr.table_id]
+        [qr.restaurant_id, qr.table_id]
       );
 
       if (activeSession.rows.length === 0) {
+        // Ensure any past non-closed sessions are marked closed
+        await client.query(
+          `UPDATE table_sessions SET status = 'closed', closed_at = COALESCE(closed_at, now())
+           WHERE restaurant_id = $1 AND table_id = $2 AND status != 'closed'`,
+          [qr.restaurant_id, qr.table_id]
+        );
+
         activeSession = await client.query(
           `INSERT INTO table_sessions (restaurant_id, table_id, status)
            VALUES ($1, $2, 'open')
            RETURNING *`,
-          [restaurant.id, qr.table_id]
+          [qr.restaurant_id, qr.table_id]
         );
 
         // Update table status to occupied
@@ -99,10 +125,11 @@ restaurantRouter.get('/qr/resolve', resolveTenant, async (req: Request, res: Res
     res.json({
       valid: true,
       restaurant: {
-        id: restaurant.id,
-        name: restaurant.name,
-        logo_url: restaurant.logo_url,
-        primary_color: restaurant.primary_color
+        id: qr.restaurant_id,
+        name: qr.restaurant_name,
+        slug: qr.restaurant_slug,
+        logo_url: qr.restaurant_logo_url,
+        primary_color: qr.restaurant_primary_color
       },
       table: {
         id: qr.table_id,

@@ -88,8 +88,10 @@ app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
   });
 });
 
-const server = app.listen(env.PORT, () => {
-  console.log(`🚀 Smart Restaurant SaaS API listening on port ${env.PORT} (${env.NODE_ENV})`);
-});
+if (process.env.NODE_ENV !== 'test' && !process.env.IS_TEST) {
+  app.listen(env.PORT, () => {
+    console.log(`🚀 Smart Restaurant SaaS API listening on port ${env.PORT} (${env.NODE_ENV})`);
+  });
+}
 
 export default app;
