@@ -508,9 +508,22 @@ export const ManagerDashboard: React.FC = () => {
                         <td className="py-3 px-4 font-mono text-slate-500 dark:text-slate-400">{o.customer_phone_snapshot}</td>
                         <td className="py-3 px-4 font-bold text-slate-900 dark:text-white">₹{(o.subtotal_paise / 100).toFixed(0)}</td>
                         <td className="py-3 px-4">
-                          <span className="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase bg-rose-500/10 text-rose-600 dark:text-rose-400 border border-rose-500/20">
-                            {o.status}
+                          <span
+                            className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase ${
+                              o.status === 'cancelled'
+                                ? 'bg-red-500/10 text-red-600 dark:text-red-400 border border-red-500/30'
+                                : o.status === 'ready'
+                                ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20'
+                                : 'bg-rose-500/10 text-rose-600 dark:text-rose-400 border border-rose-500/20'
+                            }`}
+                          >
+                            {o.status === 'cancelled' ? 'Void / Cancelled' : o.status}
                           </span>
+                          {o.notes && o.notes.includes('[VOID]') && (
+                            <div className="text-[10px] text-red-500 dark:text-red-400 font-medium mt-0.5 truncate max-w-[140px]" title={o.notes}>
+                              {o.notes}
+                            </div>
+                          )}
                         </td>
                         <td className="py-3 px-4 text-right">
                           <button

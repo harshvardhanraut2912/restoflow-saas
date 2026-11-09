@@ -37,7 +37,6 @@ export const CustomerCart: React.FC = () => {
 
   const [tables, setTables] = useState<any[]>([]);
   const [isLoadingTables, setIsLoadingTables] = useState(false);
-  const [isResolvingTable, setIsResolvingTable] = useState(false);
   const [tableError, setTableError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -54,22 +53,51 @@ export const CustomerCart: React.FC = () => {
       });
   }, []);
 
-  const handleSelectTable = async (t: any) => {
-    setIsResolvingTable(true);
-    setTableError(null);
-    try {
-      const res = await publicApi.resolveQr(t.table_number);
-      setTableContext({
-        tableId: res.table.id,
-        tableNumber: res.table.table_number,
-        sessionId: res.session.id
-      });
-      setOrderType('dine_in');
-    } catch (err: any) {
-      setTableError(err.message || `Failed to select Table ${t.table_number}`);
-    } finally {
-      setIsResolvingTable(false);
+  // If tableNumber was already set from QR scan, sync tableId automatically
+  useEffect(() => {
+    if (tables.length > 0 && tableContext.tableNumber && !tableContext.tableId) {
+      const match = tables.find(
+        (t) =>
+          t.table_number === tableContext.tableNumber ||
+          t.table_number === `T-${String(tableContext.tableNumber).padStart(2, '0')}` ||
+          `T-${String(t.table_number).padStart(2, '0')}` === tableContext.tableNumber
+      );
+      if (match) {
+        setTableContext({
+          tableId: match.id,
+          tableNumber: match.table_number,
+          sessionId: tableContext.sessionId
+        });
+      }
     }
+  }, [tables, tableContext.tableNumber, tableContext.tableId]);
+
+  // Instant 0ms table selection (zero lag, non-blocking)
+  const handleSelectTable = (t: any) => {
+    setTableError(null);
+
+    // 1. Instant client update (0 milliseconds!)
+    setTableContext({
+      tableId: t.id,
+      tableNumber: t.table_number,
+      sessionId: tableContext.sessionId
+    });
+    setOrderType('dine_in');
+
+    // 2. Silent background sync without delaying the user
+    publicApi.resolveQr(t.table_number)
+      .then((res) => {
+        if (res?.session?.id) {
+          setTableContext({
+            tableId: res.table.id,
+            tableNumber: res.table.table_number,
+            sessionId: res.session.id
+          });
+        }
+      })
+      .catch((err) => {
+        console.debug('Background table sync:', err);
+      });
   };
 
   const handleProceedToCheckout = () => {
@@ -214,10 +242,12 @@ export const CustomerCart: React.FC = () => {
             ) : (
               <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-2.5">
                 {tables.map((t) => {
+                  const rawCtx = (tableContext.tableNumber || '').replace(/\D/g, '');
+                  const rawT = (t.table_number || '').replace(/\D/g, '');
                   const isSelected =
                     tableContext.tableId === t.id ||
                     tableContext.tableNumber === t.table_number ||
-                    tableContext.tableNumber === `T-${String(t.table_number).padStart(2, '0')}`;
+                    (rawCtx && rawT && rawCtx === rawT);
                   const isOccupied = t.status === 'occupied' && !isSelected;
 
                   return (
@@ -225,7 +255,6 @@ export const CustomerCart: React.FC = () => {
                       key={t.id}
                       type="button"
                       onClick={() => handleSelectTable(t)}
-                      disabled={isResolvingTable}
                       className={`relative p-3 rounded-2xl text-center transition-all flex flex-col items-center justify-center gap-1 ${
                         isSelected
                           ? 'border-2 border-emerald-500 bg-emerald-50/95 dark:bg-emerald-950/60 text-emerald-950 dark:text-emerald-100 shadow-md ring-4 ring-emerald-500/20 scale-[1.03]'

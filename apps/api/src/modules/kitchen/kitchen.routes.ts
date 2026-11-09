@@ -36,7 +36,7 @@ kitchenRouter.get('/tickets', resolveTenant, requireStaff(['kitchen', 'manager',
        FROM kitchen_tickets kt
        JOIN orders o ON o.id = kt.order_id
        LEFT JOIN dining_tables dt ON dt.id = o.table_id
-       WHERE kt.restaurant_id = $1 AND kt.status != 'ready'
+       WHERE kt.restaurant_id = $1 AND kt.status NOT IN ('ready', 'cancelled')
        ORDER BY kt.created_at ASC`,
       [restaurant.id]
     );
@@ -127,5 +127,51 @@ kitchenRouter.patch('/tickets/:id/status', resolveTenant, requireStaff(['kitchen
   } catch (err: any) {
     console.error('Update kitchen ticket status error:', err);
     res.status(500).json({ error: 'SERVER_ERROR', message: err.message || 'Failed to update ticket.' });
+  }
+});
+
+// Cancel / Void Kitchen Ticket (Soft-cancels order & ticket, preserves in audit logs)
+kitchenRouter.delete('/tickets/:id', resolveTenant, requireStaff(['kitchen', 'manager']), async (req: Request, res: Response) => {
+  const { id } = req.params;
+  const reason = (req.body?.reason as string) || 'Cancelled by Kitchen Staff';
+  const restaurant = req.restaurant!;
+
+  try {
+    const cancelled = await withTransaction(async (client) => {
+      // 1. Update ticket to cancelled
+      const tRes = await client.query(
+        `UPDATE kitchen_tickets 
+         SET status = 'cancelled'
+         WHERE id = $1 AND restaurant_id = $2
+         RETURNING *`,
+        [id, restaurant.id]
+      );
+
+      if (tRes.rows.length === 0) {
+        throw new Error('Ticket not found.');
+      }
+
+      const ticket = tRes.rows[0];
+
+      // 2. Update order to cancelled and append reason to notes
+      await client.query(
+        `UPDATE orders 
+         SET status = 'cancelled', 
+             notes = CASE 
+               WHEN notes IS NULL OR notes = '' THEN $1
+               ELSE notes || ' [' || $1 || ']'
+             END,
+             updated_at = now() 
+         WHERE id = $2 AND restaurant_id = $3`,
+        [`[VOID] ${reason}`, ticket.order_id, restaurant.id]
+      );
+
+      return ticket;
+    });
+
+    res.json({ message: 'Order ticket cancelled and removed from active queue.', ticket: cancelled });
+  } catch (err: any) {
+    console.error('Delete kitchen ticket error:', err);
+    res.status(500).json({ error: 'SERVER_ERROR', message: err.message || 'Failed to cancel ticket.' });
   }
 });

@@ -88,6 +88,9 @@
     position: relative !important;
     left: auto !important;
     top: auto !important;
+    max-height: none !important;
+    overflow: visible !important;
+    display: block !important;
     background: #ffffff !important;
     color: #000000 !important;
     box-shadow: none !important;

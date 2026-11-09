@@ -254,10 +254,49 @@ ordersRouter.post('/customer/checkout', resolveTenant, async (req: Request, res:
 
   const { order_type, table_id, table_session_id, phone, customer_name, notes, items } = parsed.data;
 
-  // Validate dine-in requires active table session
-  if (order_type === 'dine_in' && (!table_id || !table_session_id)) {
-    res.status(400).json({ error: 'TABLE_REQUIRED', message: 'Dine-in orders require a valid table and active session.' });
-    return;
+  let resolvedSessionId = table_session_id;
+
+  // Validate dine-in requires table; resolve or create active table session on server side
+  if (order_type === 'dine_in') {
+    if (!table_id) {
+      res.status(400).json({ error: 'TABLE_REQUIRED', message: 'Dine-in orders require a table to be selected.' });
+      return;
+    }
+
+    if (!resolvedSessionId) {
+      try {
+        const sessionRes = await withTransaction(async (client) => {
+          let active = await client.query(
+            `SELECT id FROM table_sessions 
+             WHERE restaurant_id = $1 AND table_id = $2 AND status IN ('open', 'bill_requested', 'bill_generated')
+             ORDER BY opened_at DESC LIMIT 1`,
+            [restaurant.id, table_id]
+          );
+
+          if (active.rows.length === 0) {
+            active = await client.query(
+              `INSERT INTO table_sessions (restaurant_id, table_id, status)
+               VALUES ($1, $2, 'open')
+               RETURNING id`,
+              [restaurant.id, table_id]
+            );
+
+            await client.query(
+              `UPDATE dining_tables SET status = 'occupied' WHERE id = $1`,
+              [table_id]
+            );
+          }
+
+          return active.rows[0];
+        });
+
+        resolvedSessionId = sessionRes.id;
+      } catch (sessErr: any) {
+        console.error('Auto table session creation error:', sessErr);
+        res.status(500).json({ error: 'SESSION_ERROR', message: 'Failed to bind table session.' });
+        return;
+      }
+    }
   }
 
   try {
@@ -265,7 +304,7 @@ ordersRouter.post('/customer/checkout', resolveTenant, async (req: Request, res:
       restaurantId: restaurant.id,
       orderType: order_type,
       tableId: table_id,
-      tableSessionId: table_session_id,
+      tableSessionId: resolvedSessionId,
       phoneRaw: phone,
       customerName: customer_name,
       notes,

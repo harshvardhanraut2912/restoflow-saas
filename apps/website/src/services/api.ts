@@ -176,6 +176,8 @@ export const kitchenApi = {
     apiRequest('/kitchen/tickets'),
   updateStatus: (ticketId: string, status: 'acknowledged' | 'preparing' | 'ready') =>
     apiRequest(`/kitchen/tickets/${ticketId}/status`, { method: 'PATCH', body: JSON.stringify({ status }) }),
+  deleteTicket: (ticketId: string, reason?: string) =>
+    apiRequest(`/kitchen/tickets/${ticketId}`, { method: 'DELETE', body: JSON.stringify({ reason }) }),
 };
 
 // Manager APIs

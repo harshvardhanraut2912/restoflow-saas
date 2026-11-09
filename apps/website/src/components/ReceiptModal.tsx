@@ -65,21 +65,21 @@ export const ReceiptModal: React.FC<ReceiptModalProps> = ({ isOpen, onClose, rec
 
   return (
     <div
-      className={`fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4 print:p-0 print:bg-white animate-fade-in printable-receipt-modal ${
+      className={`fixed inset-0 bg-black/70 backdrop-blur-sm z-50 overflow-y-auto overscroll-contain flex justify-center items-start sm:items-center p-2.5 sm:p-6 print:p-0 print:overflow-visible print:block animate-fade-in printable-receipt-modal ${
         alignment === 'left' ? 'align-left' : 'align-center'
       }`}
     >
       <div
-        className={`bg-white text-slate-900 printable-receipt border border-slate-200 transition-all ${
+        className={`bg-white text-slate-900 printable-receipt border border-slate-200 transition-all my-auto max-h-[92vh] flex flex-col relative overflow-hidden ${
           alignment === 'left' ? 'align-left' : 'align-center'
         } ${
           paperFormat === 'a4'
-            ? 'max-w-xl w-full p-8 rounded-3xl format-a4'
-            : 'max-w-xs w-full p-6 rounded-3xl format-thermal'
-        } shadow-2xl`}
+            ? 'max-w-xl w-full rounded-3xl format-a4'
+            : 'max-w-xs w-full rounded-3xl format-thermal'
+        } shadow-2xl print:max-h-none print:overflow-visible print:shadow-none print:border-none print:block`}
       >
-        {/* Modal Top Bar (Screen only, hidden in print) */}
-        <div className="flex flex-wrap items-center justify-between pb-3 border-b border-slate-100 mb-4 gap-2 no-print">
+        {/* Modal Top Bar (Sticky, screen only, hidden in print) */}
+        <div className="sticky top-0 z-20 bg-white/95 backdrop-blur px-5 sm:px-6 pt-4 pb-3 border-b border-slate-100 flex flex-wrap items-center justify-between gap-2 no-print shrink-0">
           <div className="flex items-center gap-1.5 flex-wrap">
             {/* Paper format selector */}
             <div className="flex items-center bg-slate-100 p-1 rounded-xl text-xs font-bold">
@@ -145,7 +145,9 @@ export const ReceiptModal: React.FC<ReceiptModalProps> = ({ isOpen, onClose, rec
           </button>
         </div>
 
-        {/* Receipt Content */}
+        {/* Scrollable Receipt Body */}
+        <div className="overflow-y-auto overscroll-contain px-5 sm:px-6 py-4 flex-1 print:overflow-visible print:p-0">
+          {/* Receipt Content Header */}
         <div className="text-center pb-2">
           {/* Restaurant Logo */}
           {restaurant?.logo_url ? (
@@ -386,24 +388,25 @@ export const ReceiptModal: React.FC<ReceiptModalProps> = ({ isOpen, onClose, rec
             Please visit again soon.
           </p>
         </div>
+      </div>
 
-        {/* Action Buttons (Screen Only, Hidden in Print) */}
-        <div className="pt-3 border-t border-slate-200 flex gap-2 no-print">
-          <button
-            onClick={() => window.print()}
-            className="flex-1 bg-slate-900 hover:bg-slate-800 text-white font-bold py-2.5 rounded-xl text-xs flex items-center justify-center gap-1.5 shadow-sm transition-colors"
-          >
-            <Printer className="w-4 h-4" />
-            Print Receipt
-          </button>
-          <button
-            onClick={onClose}
-            className="px-4 py-2.5 rounded-xl border border-slate-300 text-slate-700 font-semibold text-xs hover:bg-slate-100 transition-colors"
-          >
-            Close
-          </button>
-        </div>
+      {/* Floating / Sticky Bottom Action Bar (Screen Only, Always visible!) */}
+      <div className="sticky bottom-0 z-20 bg-white/95 backdrop-blur px-5 sm:px-6 py-3 border-t border-slate-200 shadow-lg flex gap-2 no-print shrink-0">
+        <button
+          onClick={() => window.print()}
+          className="flex-1 bg-slate-900 hover:bg-slate-800 active:scale-98 text-white font-bold py-3 rounded-2xl text-xs flex items-center justify-center gap-1.5 shadow-md shadow-slate-900/20 transition-all"
+        >
+          <Printer className="w-4 h-4" />
+          Print Receipt
+        </button>
+        <button
+          onClick={onClose}
+          className="px-4 py-3 rounded-2xl border border-slate-300 text-slate-700 font-semibold text-xs hover:bg-slate-100 active:scale-98 transition-all"
+        >
+          Close
+        </button>
       </div>
     </div>
+  </div>
   );
 };

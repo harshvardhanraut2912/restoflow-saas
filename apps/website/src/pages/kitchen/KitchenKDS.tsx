@@ -9,7 +9,8 @@ import {
   VolumeX, 
   RefreshCw, 
   LogOut,
-  Utensils
+  Utensils,
+  Trash2
 } from 'lucide-react';
 import { kitchenApi, ApiError } from '../../services/api.js';
 import { useStaffAuth } from '../../context/StaffAuthContext.js';
@@ -78,6 +79,19 @@ export const KitchenKDS: React.FC = () => {
       loadTickets();
     } catch (err: any) {
       alert(err.message || 'Failed to update ticket.');
+    }
+  };
+
+  const handleDeleteTicket = async (ticketId: string, orderNumber: string) => {
+    if (!window.confirm(`Are you sure you want to cancel and void Order ${orderNumber}?\n\nIt will be removed from the kitchen board and logged as Cancelled on the Manager Dashboard.`)) {
+      return;
+    }
+
+    try {
+      await kitchenApi.deleteTicket(ticketId, 'Cancelled from Kitchen Display');
+      loadTickets();
+    } catch (err: any) {
+      alert(err.message || 'Failed to cancel order ticket.');
     }
   };
 
@@ -221,24 +235,33 @@ export const KitchenKDS: React.FC = () => {
                   </div>
 
                   {/* Actions Footer */}
-                  <div className="p-4 bg-slate-50 dark:bg-slate-950/80 border-t border-slate-200 dark:border-slate-800">
+                  <div className="p-3.5 bg-slate-50 dark:bg-slate-950/80 border-t border-slate-200 dark:border-slate-800 flex items-center gap-2">
                     {t.ticket_status === 'new' ? (
                       <button
                         onClick={() => handleUpdateStatus(t.ticket_id, 'preparing')}
-                        className="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-3.5 rounded-xl text-sm transition-all flex items-center justify-center gap-2 shadow-lg shadow-indigo-900/30"
+                        className="flex-1 bg-indigo-600 hover:bg-indigo-500 active:scale-98 text-white font-bold py-3 rounded-xl text-xs transition-all flex items-center justify-center gap-2 shadow-md shadow-indigo-900/20"
                       >
-                        <Play className="w-4 h-4 fill-white" />
-                        Start Preparing
+                        <Play className="w-3.5 h-3.5 fill-white" />
+                        Start Cooking
                       </button>
                     ) : (
                       <button
                         onClick={() => handleUpdateStatus(t.ticket_id, 'ready')}
-                        className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-3.5 rounded-xl text-sm transition-all flex items-center justify-center gap-2 shadow-lg shadow-emerald-900/30"
+                        className="flex-1 bg-emerald-600 hover:bg-emerald-500 active:scale-98 text-white font-bold py-3 rounded-xl text-xs transition-all flex items-center justify-center gap-2 shadow-md shadow-emerald-900/20"
                       >
-                        <CheckCircle className="w-4 h-4" />
-                        Mark Ready for Serving
+                        <CheckCircle className="w-3.5 h-3.5" />
+                        Mark Ready
                       </button>
                     )}
+
+                    <button
+                      onClick={() => handleDeleteTicket(t.ticket_id, t.order_number)}
+                      className="px-3.5 py-3 rounded-xl border border-rose-300 dark:border-rose-900/80 text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 active:scale-98 font-bold text-xs flex items-center gap-1.5 transition-all shrink-0"
+                      title="Cancel & Void Order from Kitchen (Logged on Manager Dashboard)"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                      <span>Void</span>
+                    </button>
                   </div>
                 </div>
               );
