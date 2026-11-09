@@ -18,13 +18,23 @@ export async function resolveTenant(req: Request, res: Response, next: NextFunct
       if (result.rows.length > 0) {
         restaurant = result.rows[0];
       } else {
-        // Subdomain extraction e.g. "urbancrust.localhost" -> "urbancrust"
-        const parts = hostClean.split('.');
-        if (parts.length >= 2 && parts[0] !== 'www' && parts[0] !== 'localhost') {
-          const subSlug = parts[0];
-          result = await query<Restaurant>('SELECT * FROM restaurants WHERE slug = $1 AND status != \'deleted\'', [subSlug]);
-          if (result.rows.length > 0) {
-            restaurant = result.rows[0];
+        const isTunnelOrGeneric = 
+          hostClean.includes('trycloudflare.com') ||
+          hostClean.includes('loca.lt') ||
+          hostClean.includes('ngrok') ||
+          hostClean.includes('serveo.net') ||
+          hostClean.includes('pinggy') ||
+          /^\d+\.\d+\.\d+\.\d+$/.test(hostClean);
+
+        if (!isTunnelOrGeneric) {
+          // Subdomain extraction e.g. "urbancrust.localhost" -> "urbancrust"
+          const parts = hostClean.split('.');
+          if (parts.length >= 2 && parts[0] !== 'www' && parts[0] !== 'localhost') {
+            const subSlug = parts[0];
+            result = await query<Restaurant>('SELECT * FROM restaurants WHERE slug = $1 AND status != \'deleted\'', [subSlug]);
+            if (result.rows.length > 0) {
+              restaurant = result.rows[0];
+            }
           }
         }
       }

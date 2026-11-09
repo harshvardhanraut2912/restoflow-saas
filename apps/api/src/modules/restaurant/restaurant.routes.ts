@@ -76,7 +76,15 @@ restaurantRouter.get('/qr/resolve', async (req: Request, res: Response) => {
       const hostClean = hostHeader.split(':')[0].toLowerCase();
       let tenantSlug = (req.headers['x-restaurant-slug'] || req.query.resto) as string;
 
-      if (!tenantSlug && hostClean) {
+      const isTunnelOrGeneric = 
+        hostClean.includes('trycloudflare.com') ||
+        hostClean.includes('loca.lt') ||
+        hostClean.includes('ngrok') ||
+        hostClean.includes('serveo.net') ||
+        hostClean.includes('pinggy') ||
+        /^\d+\.\d+\.\d+\.\d+$/.test(hostClean);
+
+      if (!tenantSlug && hostClean && !isTunnelOrGeneric) {
         const parts = hostClean.split('.');
         if (parts.length >= 2 && parts[0] !== 'www' && parts[0] !== 'localhost') {
           tenantSlug = parts[0];

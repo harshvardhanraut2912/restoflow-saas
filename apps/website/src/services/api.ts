@@ -13,18 +13,28 @@ export class ApiError extends Error {
 export function getActiveSubdomainSlug(): string | null {
   if (typeof window === 'undefined') return null;
 
-  // 1. Direct subdomain extraction e.g. "royalspice.localhost" -> "royalspice"
-  const hostname = window.location.hostname.toLowerCase();
-  const parts = hostname.split('.');
-  if (parts.length >= 2 && parts[0] !== 'www' && parts[0] !== 'localhost') {
-    return parts[0];
-  }
-
-  // 2. Query parameter fallback e.g. ?resto=urbancrust
+  // 1. Query parameter override e.g. ?resto=royalspice or ?resto=urbancrust
   const urlParams = new URLSearchParams(window.location.search);
   const paramResto = urlParams.get('resto');
   if (paramResto) {
     return paramResto.toLowerCase();
+  }
+
+  // 2. Direct subdomain extraction e.g. "royalspice.localhost" -> "royalspice"
+  const hostname = window.location.hostname.toLowerCase();
+  const isTunnelOrGeneric = 
+    hostname.includes('trycloudflare.com') ||
+    hostname.includes('loca.lt') ||
+    hostname.includes('ngrok') ||
+    hostname.includes('serveo.net') ||
+    hostname.includes('pinggy') ||
+    /^\d+\.\d+\.\d+\.\d+$/.test(hostname);
+
+  if (!isTunnelOrGeneric) {
+    const parts = hostname.split('.');
+    if (parts.length >= 2 && parts[0] !== 'www' && parts[0] !== 'localhost') {
+      return parts[0];
+    }
   }
 
   // 3. Fallback to localStorage
