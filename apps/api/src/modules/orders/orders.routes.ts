@@ -432,21 +432,25 @@ ordersRouter.get('/customer/:id', resolveTenant, async (req: Request, res: Respo
       [order.id]
     );
 
-    // Check bill and payment status for this order / session
+    // Check bill and payment status for this specific order
     const billRes = await query(
       `SELECT id, bill_number, status, grand_total_paise, receipt_token_hash, settled_at 
        FROM bills 
-       WHERE restaurant_id = $1 AND (order_id = $2 OR (table_session_id = $3 AND $3 IS NOT NULL))
+       WHERE restaurant_id = $1 AND (
+         order_id = $2 
+         OR (table_session_id = $3 AND $3 IS NOT NULL AND (order_id IS NULL OR order_id = $2) AND created_at >= $4)
+       )
        ORDER BY created_at DESC LIMIT 1`,
-      [restaurant.id, order.id, order.table_session_id || null]
+      [restaurant.id, order.id, order.table_session_id || null, order.created_at]
     );
 
     const bill = billRes.rows[0] || null;
-    const isPaid = bill?.status === 'paid' || order.status === 'completed';
+    const isPaid = (bill?.status === 'paid') || (order.status === 'completed');
 
     // Session order sequence & cumulative total calculation for multi-round dining
     let roundNumber = 1;
     let sessionSubtotalPaise = order.subtotal_paise;
+    let sessionUnpaidPaise = isPaid ? 0 : order.subtotal_paise;
     let sessionOrders: any[] = [];
 
     if (order.table_session_id) {
@@ -492,21 +496,63 @@ ordersRouter.get('/customer/:id', resolveTenant, async (req: Request, res: Respo
           COALESCE(
             (
               SELECT json_agg(json_build_object(
+                'id', oi.id,
+                'name_snapshot', oi.name_snapshot,
                 'name', oi.name_snapshot,
                 'quantity', oi.quantity,
                 'unit_price_paise', oi.unit_price_paise,
                 'total_price_paise', oi.total_price_paise,
-                'variant_name', oi.variant_name_snapshot
+                'variant_name_snapshot', oi.variant_name_snapshot,
+                'variant_name', oi.variant_name_snapshot,
+                'modifiers', COALESCE(
+                  (
+                    SELECT json_agg(json_build_object('name', oim.name_snapshot, 'price_paise', oim.unit_price_paise))
+                    FROM order_item_modifiers oim WHERE oim.order_item_id = oi.id
+                  ), '[]'::json
+                )
               ))
               FROM order_items oi WHERE oi.order_id = so.id
             ), '[]'::json
-          ) as items
+          ) as items,
+          (
+            SELECT json_build_object(
+              'id', b.id,
+              'bill_number', b.bill_number,
+              'status', b.status,
+              'grand_total_paise', b.grand_total_paise,
+              'receipt_token_hash', b.receipt_token_hash,
+              'settled_at', b.settled_at
+            )
+            FROM bills b
+            WHERE b.restaurant_id = so.restaurant_id 
+              AND (
+                b.order_id = so.id 
+                OR (b.table_session_id = so.table_session_id AND (b.order_id IS NULL OR b.order_id = so.id) AND b.created_at >= so.created_at)
+              )
+            ORDER BY b.created_at DESC LIMIT 1
+          ) as bill,
+          (
+            SELECT COALESCE(
+              (
+                SELECT TRUE FROM bills b
+                WHERE b.restaurant_id = so.restaurant_id 
+                  AND (
+                    b.order_id = so.id 
+                    OR (b.table_session_id = so.table_session_id AND (b.order_id IS NULL OR b.order_id = so.id) AND b.created_at >= so.created_at)
+                  )
+                  AND b.status = 'paid'
+                LIMIT 1
+              ),
+              so.status = 'completed'
+            )
+          ) as is_paid
          FROM orders so
          WHERE so.table_session_id = $1 AND so.restaurant_id = $2 AND so.status NOT IN ('cancelled', 'rejected')
          ORDER BY so.created_at ASC`,
         [order.table_session_id, restaurant.id]
       );
       sessionOrders = allSessionOrdersRes.rows;
+      sessionUnpaidPaise = sessionOrders.reduce((sum, o) => sum + (o.is_paid ? 0 : (o.subtotal_paise || 0)), 0);
     }
 
     res.json({
@@ -518,6 +564,7 @@ ordersRouter.get('/customer/:id', resolveTenant, async (req: Request, res: Respo
         receipt_token: bill?.receipt_token_hash || null,
         round_number: roundNumber,
         session_subtotal_paise: sessionSubtotalPaise,
+        session_unpaid_paise: sessionUnpaidPaise,
         session_orders: sessionOrders
       }
     });

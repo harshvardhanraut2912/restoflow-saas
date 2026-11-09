@@ -2,7 +2,6 @@ import React, { useEffect, useState } from 'react';
 import { useParams, useSearchParams, useNavigate } from 'react-router-dom';
 import { 
   CheckCircle, 
-  Clock, 
   ChefHat, 
   Utensils, 
   ArrowLeft, 
@@ -12,7 +11,9 @@ import {
   Bell,
   CreditCard,
   DollarSign,
-  X
+  X,
+  ChevronDown,
+  ChevronUp
 } from 'lucide-react';
 import { customerApi } from '../../services/api.js';
 import { useTenant } from '../../context/TenantContext.js';
@@ -35,6 +36,17 @@ export const CustomerOrderTracking: React.FC = () => {
   const [isPayingOnline, setIsPayingOnline] = useState(false);
   const [isProcessingPayment, setIsProcessingPayment] = useState(false);
   const [isReceiptOpen, setIsReceiptOpen] = useState(false);
+  const [selectedReceiptOrder, setSelectedReceiptOrder] = useState<any>(null);
+
+  // Accordion state for multi-order mode (collapsed by default when 2+ orders)
+  const [expandedOrders, setExpandedOrders] = useState<Record<string, boolean>>({});
+
+  const toggleOrderExpand = (id: string) => {
+    setExpandedOrders((prev) => ({
+      ...prev,
+      [id]: !prev[id]
+    }));
+  };
 
   const fetchOrder = () => {
     if (!orderId || !token) {
@@ -63,6 +75,7 @@ export const CustomerOrderTracking: React.FC = () => {
   }, [orderId, token]);
 
   const handleCallWaiter = async () => {
+    if (!order) return;
     setIsCallingWaiter(true);
     try {
       await customerApi.requestService({
@@ -70,9 +83,9 @@ export const CustomerOrderTracking: React.FC = () => {
         table_id: order.table_id,
         table_session_id: order.table_session_id,
         request_type: 'waiter',
-        notes: `Customer called waiter from Table ${order.table_number || ''}`
+        notes: `Customer called waiter from Table ${order.table_number ? String(order.table_number).replace(/^T-0?/, '') : ''}`
       });
-      setWaiterCallSuccess(`Floor captain called for Table ${order.table_number || ''}! Someone is on the way.`);
+      setWaiterCallSuccess(`Floor captain called for Table ${order.table_number ? String(order.table_number).replace(/^T-0?/, '') : ''}! Someone is on the way.`);
       setTimeout(() => setWaiterCallSuccess(null), 8000);
     } catch (err: any) {
       alert(err.message || 'Failed to call waiter.');
@@ -82,9 +95,10 @@ export const CustomerOrderTracking: React.FC = () => {
   };
 
   const handleCustomerPayOnline = async () => {
+    if (!order) return;
     setIsProcessingPayment(true);
     try {
-      const res = await customerApi.payOnline({
+      await customerApi.payOnline({
         order_id: order.id,
         table_session_id: order.table_session_id,
         method: 'online_gateway'
@@ -131,9 +145,86 @@ export const CustomerOrderTracking: React.FC = () => {
     { key: 'served', label: 'Served', desc: 'Delivered to your table. Enjoy!' }
   ];
 
-  const isOrderPaid = order.is_paid || order.status === 'completed' || order.bill?.status === 'paid';
-  const currentStepIndex = steps.findIndex((s) => s.key === order.status);
-  const activeIndex = order.status === 'completed' ? 5 : (currentStepIndex >= 0 ? currentStepIndex : 0);
+  // Specific Order Progress Calculation: Strictly based on that individual order's status
+  const getStepStatus = (status: string, stepIndex: number) => {
+    let activeIndex = 0;
+    if (status === 'accepted') activeIndex = 1;
+    else if (status === 'preparing') activeIndex = 2;
+    else if (status === 'ready') activeIndex = 3;
+    else if (status === 'served' || status === 'completed') activeIndex = 4;
+
+    const isComplete = status === 'completed' || status === 'served';
+    const isDone = isComplete ? true : stepIndex < activeIndex;
+    const isCurrent = !isComplete && stepIndex === activeIndex;
+
+    return { isDone, isCurrent };
+  };
+
+  const renderStatusBadge = (status: string, isPaid: boolean) => {
+    if (status === 'completed' || isPaid) {
+      return (
+        <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-emerald-100 text-emerald-800 border border-emerald-200">
+          Completed
+        </span>
+      );
+    }
+    if (status === 'ready') {
+      return (
+        <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-emerald-500 text-white shadow-sm flex items-center gap-1.5">
+          <span className="relative flex h-1.5 w-1.5">
+            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-white opacity-75"></span>
+            <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-white"></span>
+          </span>
+          Ready to Serve
+        </span>
+      );
+    }
+    if (status === 'preparing') {
+      return (
+        <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-amber-100 text-amber-800 border border-amber-300 flex items-center gap-1">
+          <ChefHat className="w-3 h-3 text-amber-700 animate-bounce" />
+          Cooking Fresh
+        </span>
+      );
+    }
+    if (status === 'accepted') {
+      return (
+        <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-blue-100 text-blue-800 border border-blue-200">
+          Accepted
+        </span>
+      );
+    }
+    if (status === 'served') {
+      return (
+        <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-emerald-100 text-emerald-800 border border-emerald-200">
+          Served
+        </span>
+      );
+    }
+    return (
+      <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-slate-100 text-slate-700 border border-slate-200">
+        Order Placed
+      </span>
+    );
+  };
+
+  // Determine all orders on this session / table
+  const sessionOrders: any[] = (order.session_orders && order.session_orders.length > 0)
+    ? order.session_orders
+    : [order];
+  const hasMultipleOrders = sessionOrders.length >= 2;
+
+  // Total session statistics
+  const totalSubtotalPaise = order.session_subtotal_paise || order.subtotal_paise || 0;
+  const totalUnpaidPaise = typeof order.session_unpaid_paise === 'number'
+    ? order.session_unpaid_paise
+    : (order.is_paid ? 0 : (order.subtotal_paise || 0));
+  const isEverythingPaid = totalUnpaidPaise === 0;
+
+  const displayTable = order.table_number ? String(order.table_number).replace(/^T-0?/, '') : '';
+
+  // Active receipt target for the ReceiptModal
+  const activeReceiptOrder = selectedReceiptOrder || order;
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 pb-24">
@@ -148,9 +239,10 @@ export const CustomerOrderTracking: React.FC = () => {
             Menu
           </button>
           <div className="text-center">
-            <h1 className="font-bold text-sm">Order Status</h1>
+            <h1 className="font-bold text-sm">Order Tracking</h1>
             <div className="text-[10px] text-slate-400">
-              {order.round_number ? `Order ${order.round_number} (${order.order_number})` : `Order ${order.order_number}`}
+              {order.order_type === 'dine_in' ? `Table ${displayTable}` : 'Takeaway'}
+              {hasMultipleOrders ? ` • ${sessionOrders.length} Orders` : ` • ${order.order_number}`}
             </div>
           </div>
           <button
@@ -171,8 +263,8 @@ export const CustomerOrderTracking: React.FC = () => {
           </div>
         )}
 
-        {/* PAID Banner when order/bill is paid */}
-        {isOrderPaid && (
+        {/* Global Payment Banner */}
+        {isEverythingPaid ? (
           <div className="p-5 rounded-3xl bg-emerald-50 border-2 border-emerald-500 text-emerald-950 shadow-sm flex items-center justify-between">
             <div className="flex items-center gap-3">
               <div className="w-10 h-10 rounded-2xl bg-emerald-600 text-white flex items-center justify-center font-bold">
@@ -180,168 +272,258 @@ export const CustomerOrderTracking: React.FC = () => {
               </div>
               <div>
                 <div className="font-black text-sm text-emerald-900">PAID • Bill Settled</div>
-                <div className="text-xs text-emerald-700">Thank you for dining with us!</div>
+                <div className="text-xs text-emerald-700">All orders paid. Thank you!</div>
               </div>
             </div>
             <button
-              onClick={() => setIsReceiptOpen(true)}
+              onClick={() => {
+                setSelectedReceiptOrder(order);
+                setIsReceiptOpen(true);
+              }}
               className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs shadow-md shadow-emerald-900/20 flex items-center gap-1.5"
             >
               <Receipt className="w-3.5 h-3.5" />
               Receipt
             </button>
           </div>
-        )}
-
-        {/* Status Stepper Card */}
-        <div className="bg-white border border-slate-200 rounded-3xl p-6 shadow-sm">
-          <div className="flex items-center justify-between mb-6 pb-4 border-b border-slate-100">
+        ) : totalUnpaidPaise > 0 && hasMultipleOrders ? (
+          <div className="p-5 rounded-3xl bg-rose-50/80 border border-rose-200 text-rose-950 shadow-sm flex items-center justify-between">
             <div>
-              <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
-                {order.order_type === 'dine_in' ? `Table ${order.table_number ? String(order.table_number).replace(/^T-0?/, '') : ''}` : 'Takeaway Order'}
-                {order.round_number ? ` • Order ${order.round_number}` : ''}
-              </span>
-              <div className="text-2xl font-black text-slate-900">
-                {order.order_number}
-              </div>
+              <span className="text-[10px] font-bold uppercase tracking-wider text-rose-600">Unpaid Balance</span>
+              <div className="text-xl font-black text-rose-600">₹{(totalUnpaidPaise / 100).toFixed(0)}</div>
+              <div className="text-[11px] text-slate-500 mt-0.5">Table Total: ₹{(totalSubtotalPaise / 100).toFixed(0)}</div>
             </div>
-            <div className="text-right">
-              <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
-                {isOrderPaid ? 'Status' : order.session_subtotal_paise ? 'Total Table Amount' : 'Amount'}
-              </span>
-              <div className={`text-lg font-black ${isOrderPaid ? 'text-emerald-600' : 'text-rose-600'}`}>
-                {isOrderPaid ? 'PAID' : `₹${((order.session_subtotal_paise || order.subtotal_paise) / 100).toFixed(0)}`}
-              </div>
-              {!isOrderPaid && order.session_subtotal_paise && order.session_subtotal_paise !== order.subtotal_paise && (
-                <div className="text-[10px] text-slate-400 font-medium">
-                  This Batch: ₹{(order.subtotal_paise / 100).toFixed(0)}
-                </div>
-              )}
+            <button
+              onClick={() => setIsPayingOnline(true)}
+              className="px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs shadow-md shadow-emerald-900/20 flex items-center gap-1.5"
+            >
+              <CreditCard className="w-4 h-4" />
+              Pay Online
+            </button>
+          </div>
+        ) : null}
+
+        {/* Section Header when Multiple Orders are placed on Table */}
+        {hasMultipleOrders && (
+          <div className="px-1 flex items-center justify-between">
+            <div>
+              <h2 className="text-sm font-extrabold text-slate-900">
+                Orders on Table {displayTable} ({sessionOrders.length})
+              </h2>
+              <p className="text-[11px] text-slate-500">
+                Tap any order dropdown below to track live cooking progress & dishes
+              </p>
             </div>
-          </div>
-
-          {/* Stepper */}
-          <div className="space-y-6">
-            {steps.map((step, idx) => {
-              const isDone = isOrderPaid || idx < activeIndex;
-              const isCurrent = !isOrderPaid && idx === activeIndex;
-
-              return (
-                <div key={step.key} className="flex items-start gap-4 relative">
-                  {idx < steps.length - 1 && (
-                    <div
-                      className={`absolute left-4 top-8 w-0.5 h-10 -ml-[1px] transition-colors ${
-                        isDone ? 'bg-emerald-500' : 'bg-slate-200'
-                      }`}
-                    />
-                  )}
-
-                  <div
-                    className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-xs shrink-0 z-10 transition-all ${
-                      isDone
-                        ? 'bg-emerald-500 text-white shadow-md shadow-emerald-500/20'
-                        : isCurrent
-                        ? 'bg-rose-600 text-white ring-4 ring-rose-500/20 animate-pulse'
-                        : 'bg-slate-100 text-slate-400'
-                    }`}
-                  >
-                    {isDone ? <CheckCircle className="w-4 h-4" /> : idx + 1}
-                  </div>
-
-                  <div>
-                    <div className={`font-bold text-xs sm:text-sm ${
-                      isCurrent ? 'text-rose-600' : isDone ? 'text-slate-900 font-bold' : 'text-slate-400'
-                    }`}>
-                      {step.label}
-                    </div>
-                    <div className="text-[11px] text-slate-500 mt-0.5">
-                      {step.desc}
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-
-        {/* Ordered Items Breakdown */}
-        <div className="bg-white border border-slate-200 rounded-3xl p-5 space-y-3 shadow-sm">
-          <div className="text-xs font-bold uppercase tracking-wider text-slate-400 pb-2 border-b border-slate-100 flex items-center justify-between">
-            <span>Dishes in Order {order.round_number || 1} ({order.items?.length || 0})</span>
-            <span className="font-mono text-slate-700">₹{(order.subtotal_paise / 100).toFixed(0)}</span>
-          </div>
-
-          <div className="divide-y divide-slate-100">
-            {order.items?.map((item: any) => (
-              <div key={item.id} className="py-2.5 first:pt-0 last:pb-0 flex items-center justify-between text-xs">
-                <div>
-                  <div className="font-semibold text-slate-900">
-                    {item.quantity}x {item.name_snapshot}
-                  </div>
-                  {item.variant_name_snapshot && (
-                    <div className="text-[11px] text-slate-400">{item.variant_name_snapshot}</div>
-                  )}
-                  {item.modifiers && item.modifiers.length > 0 && (
-                    <div className="text-[10px] text-slate-400">
-                      {item.modifiers.map((m: any) => m.name).join(', ')}
-                    </div>
-                  )}
-                </div>
-                <span className="font-bold">₹{(item.total_price_paise / 100).toFixed(0)}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        {/* Multi-Order Table Summary (when user places Order 1, Order 2, etc.) */}
-        {order.session_orders && order.session_orders.length > 1 && (
-          <div className="bg-white border border-slate-200 rounded-3xl p-5 space-y-3 shadow-sm">
-            <div className="flex items-center justify-between pb-2 border-b border-slate-100">
-              <span className="text-xs font-bold uppercase tracking-wider text-slate-500">
-                All Orders on Table {order.table_number ? String(order.table_number).replace(/^T-0?/, '') : ''} ({order.session_orders.length})
-              </span>
-              <span className="text-xs font-black text-rose-600">
-                Total: ₹{((order.session_subtotal_paise || order.subtotal_paise) / 100).toFixed(0)}
-              </span>
-            </div>
-
-            <div className="space-y-2.5">
-              {order.session_orders.map((so: any) => {
-                const isCurrent = so.id === order.id;
-                return (
-                  <div
-                    key={so.id}
-                    className={`p-3 rounded-2xl border transition-all ${
-                      isCurrent
-                        ? 'bg-rose-50/60 border-rose-300'
-                        : 'bg-slate-50 border-slate-200/80'
-                    }`}
-                  >
-                    <div className="flex items-center justify-between text-xs font-bold mb-1">
-                      <span className="text-slate-900 flex items-center gap-1.5">
-                        <span className="text-rose-600 font-extrabold">Order {so.round_number || 1}</span>
-                        <span className="text-slate-400 font-normal">({so.order_number})</span>
-                        {isCurrent && (
-                          <span className="px-1.5 py-0.5 rounded text-[9px] bg-rose-600 text-white font-bold">This Order</span>
-                        )}
-                      </span>
-                      <span className="text-slate-900 font-black">₹{(so.subtotal_paise / 100).toFixed(0)}</span>
-                    </div>
-                    <div className="text-[11px] text-slate-500 line-clamp-1">
-                      {so.items?.map((it: any) => `${it.quantity}x ${it.name}`).join(', ')}
-                    </div>
-                    <div className="mt-1 flex items-center justify-between text-[10px]">
-                      <span className="text-slate-400 uppercase font-semibold">Status: <span className="text-slate-700 font-bold">{so.status}</span></span>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
+            <span className="text-xs font-black text-slate-700 font-mono">
+              ₹{(totalSubtotalPaise / 100).toFixed(0)} Total
+            </span>
           </div>
         )}
+
+        {/* ORDER CARDS:
+            - If 2+ orders: All minimized first, click dropdown to open that order's details.
+            - If 1 order: By default, all details are shown directly open.
+        */}
+        <div className="space-y-4">
+          {sessionOrders.map((o: any) => {
+            const isSingle = !hasMultipleOrders;
+            const isExpanded = isSingle || Boolean(expandedOrders[o.id]);
+            const isCurrentUrlOrder = o.id === order.id;
+            const orderItems = o.items || [];
+            const subtotal = o.subtotal_paise || 0;
+            const isPaid = Boolean(o.is_paid);
+
+            return (
+              <div
+                key={o.id}
+                className={`bg-white border rounded-3xl shadow-sm overflow-hidden transition-all duration-200 ${
+                  isCurrentUrlOrder ? 'border-rose-300 ring-1 ring-rose-200' : 'border-slate-200'
+                }`}
+              >
+                {/* Accordion / Header Bar */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (hasMultipleOrders) {
+                      toggleOrderExpand(o.id);
+                    }
+                  }}
+                  className={`w-full p-5 flex items-center justify-between text-left transition-colors ${
+                    hasMultipleOrders ? 'hover:bg-slate-50/80 cursor-pointer' : 'cursor-default'
+                  }`}
+                >
+                  <div className="flex items-center gap-3.5 min-w-0">
+                    <div className={`w-10 h-10 rounded-2xl flex items-center justify-center font-bold shrink-0 ${
+                      isPaid 
+                        ? 'bg-emerald-50 text-emerald-600 border border-emerald-200' 
+                        : 'bg-rose-50 text-rose-600 border border-rose-200'
+                    }`}>
+                      <Utensils className="w-5 h-5" />
+                    </div>
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="font-extrabold text-sm text-slate-900">
+                          Order {o.round_number || 1}
+                        </span>
+                        <span className="text-xs font-mono text-slate-400">
+                          ({o.order_number})
+                        </span>
+                        {isCurrentUrlOrder && hasMultipleOrders && (
+                          <span className="px-1.5 py-0.5 rounded text-[9px] bg-rose-600 text-white font-bold">
+                            Current
+                          </span>
+                        )}
+                      </div>
+                      <div className="text-xs text-slate-500 truncate mt-0.5">
+                        {orderItems.length > 0
+                          ? orderItems.map((it: any) => `${it.quantity}x ${it.name_snapshot || it.name}`).join(', ')
+                          : 'Dishes in order'}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-3 shrink-0 ml-3">
+                    <div className="text-right">
+                      <div className="text-xs font-black text-slate-900 font-mono">
+                        {isPaid ? (
+                          <span className="text-emerald-600 font-bold">PAID</span>
+                        ) : (
+                          `₹${(subtotal / 100).toFixed(0)}`
+                        )}
+                      </div>
+                      <div className="mt-0.5">
+                        {renderStatusBadge(o.status, isPaid)}
+                      </div>
+                    </div>
+
+                    {/* Dropdown Chevron for 2+ Orders */}
+                    {hasMultipleOrders && (
+                      <div className="w-7 h-7 rounded-full bg-slate-100 flex items-center justify-center text-slate-500">
+                        {isExpanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+                      </div>
+                    )}
+                  </div>
+                </button>
+
+                {/* Expanded Details: Live Stepper, Dishes List, and Receipt Button */}
+                {isExpanded && (
+                  <div className="px-5 pb-5 pt-1 border-t border-slate-100 space-y-5 animate-in fade-in duration-200">
+                    {/* Live Progress Stepper for this specific order */}
+                    <div>
+                      <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-3">
+                        Cooking &amp; Delivery Progress
+                      </div>
+                      <div className="space-y-4">
+                        {steps.map((step, idx) => {
+                          const { isDone, isCurrent } = getStepStatus(o.status, idx);
+
+                          return (
+                            <div key={step.key} className="flex items-start gap-3.5 relative">
+                              {idx < steps.length - 1 && (
+                                <div
+                                  className={`absolute left-3.5 top-7 w-0.5 h-7 -ml-[1px] transition-colors ${
+                                    isDone ? 'bg-emerald-500' : 'bg-slate-200'
+                                  }`}
+                                />
+                              )}
+
+                              <div
+                                className={`w-7 h-7 rounded-full flex items-center justify-center font-bold text-xs shrink-0 z-10 transition-all ${
+                                  isDone
+                                    ? 'bg-emerald-500 text-white shadow-sm'
+                                    : isCurrent
+                                    ? 'bg-rose-600 text-white ring-4 ring-rose-500/20 animate-pulse'
+                                    : 'bg-slate-100 text-slate-400'
+                                }`}
+                              >
+                                {isDone ? <CheckCircle className="w-4 h-4" /> : idx + 1}
+                              </div>
+
+                              <div>
+                                <div className={`font-bold text-xs ${
+                                  isCurrent ? 'text-rose-600' : isDone ? 'text-slate-900 font-bold' : 'text-slate-400'
+                                }`}>
+                                  {step.label}
+                                </div>
+                                <div className="text-[10px] text-slate-500">
+                                  {step.desc}
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    {/* Dishes in this order */}
+                    <div className="bg-slate-50 rounded-2xl p-4 space-y-2 border border-slate-100">
+                      <div className="text-[11px] font-bold uppercase tracking-wider text-slate-500 pb-1.5 border-b border-slate-200/60 flex items-center justify-between">
+                        <span>Dishes in Order {o.round_number || 1} ({orderItems.length})</span>
+                        <span className="font-mono text-slate-700">₹{(subtotal / 100).toFixed(0)}</span>
+                      </div>
+
+                      <div className="divide-y divide-slate-200/60">
+                        {orderItems.map((item: any, iIdx: number) => (
+                          <div key={item.id || iIdx} className="py-2 first:pt-0 last:pb-0 flex items-center justify-between text-xs">
+                            <div>
+                              <div className="font-semibold text-slate-800">
+                                {item.quantity}x {item.name_snapshot || item.name}
+                              </div>
+                              {(item.variant_name_snapshot || item.variant_name) && (
+                                <div className="text-[10px] text-slate-400">
+                                  {item.variant_name_snapshot || item.variant_name}
+                                </div>
+                              )}
+                              {item.modifiers && item.modifiers.length > 0 && (
+                                <div className="text-[9px] text-slate-400">
+                                  {item.modifiers.map((m: any) => m.name).join(', ')}
+                                </div>
+                              )}
+                            </div>
+                            <span className="font-bold text-slate-700 font-mono">
+                              ₹{((item.total_price_paise || item.unit_price_paise * item.quantity || 0) / 100).toFixed(0)}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Order Footer: Payment Status & Print Receipt */}
+                    <div className="flex items-center justify-between pt-1 text-xs">
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-slate-400 font-semibold">Payment:</span>
+                        {isPaid ? (
+                          <span className="font-extrabold text-emerald-600 flex items-center gap-1">
+                            <CheckCircle className="w-3.5 h-3.5" /> PAID
+                          </span>
+                        ) : (
+                          <span className="font-bold text-rose-600">Pending (₹{(subtotal / 100).toFixed(0)})</span>
+                        )}
+                      </div>
+
+                      {isPaid && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSelectedReceiptOrder(o);
+                            setIsReceiptOpen(true);
+                          }}
+                          className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs shadow-sm flex items-center gap-1.5"
+                        >
+                          <Receipt className="w-3.5 h-3.5" />
+                          Receipt
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
 
         {/* Action Controls */}
-        <div className="space-y-3">
+        <div className="space-y-3 pt-2">
           {/* Button 1: Call Waiter / Request Service */}
           <button
             onClick={handleCallWaiter}
@@ -352,14 +534,14 @@ export const CustomerOrderTracking: React.FC = () => {
             {isCallingWaiter ? 'Calling Waiter...' : 'Call Waiter / Request Service'}
           </button>
 
-          {/* Button 2: Pay Bill Online (VPM / Card) - Only shown if NOT paid yet */}
-          {!isOrderPaid && (
+          {/* Button 2: Pay Bill Online (Only shown if NOT all paid yet) */}
+          {!isEverythingPaid && (
             <button
               onClick={() => setIsPayingOnline(true)}
               className="w-full bg-emerald-600 hover:bg-emerald-500 active:scale-98 text-white font-black py-4 rounded-2xl text-xs flex items-center justify-center gap-2 shadow-lg shadow-emerald-900/20 transition-all"
             >
               <CreditCard className="w-4 h-4" />
-              Pay Bill Online (UPI / Card)
+              Pay Bill Online (UPI / Card) • ₹{(totalUnpaidPaise / 100).toFixed(0)}
             </button>
           )}
 
@@ -384,9 +566,12 @@ export const CustomerOrderTracking: React.FC = () => {
           )}
 
           {/* Button 5: View & Print Receipt when bill is paid */}
-          {isOrderPaid && (
+          {isEverythingPaid && (
             <button
-              onClick={() => setIsReceiptOpen(true)}
+              onClick={() => {
+                setSelectedReceiptOrder(order);
+                setIsReceiptOpen(true);
+              }}
               className="w-full bg-emerald-600 hover:bg-emerald-500 active:scale-98 text-white font-black py-4 rounded-2xl text-xs flex items-center justify-center gap-2 shadow-lg shadow-emerald-900/20 transition-all"
             >
               <Receipt className="w-4 h-4" />
@@ -403,7 +588,9 @@ export const CustomerOrderTracking: React.FC = () => {
             <div className="flex items-center justify-between pb-3 border-b border-slate-100 mb-4">
               <div>
                 <h3 className="text-base font-bold text-slate-900">Settle Order Online</h3>
-                <p className="text-xs text-slate-500">Order #{order.order_number}</p>
+                <p className="text-xs text-slate-500">
+                  {order.order_type === 'dine_in' ? `Table ${displayTable}` : `Order #${order.order_number}`}
+                </p>
               </div>
               <button
                 onClick={() => setIsPayingOnline(false)}
@@ -414,13 +601,13 @@ export const CustomerOrderTracking: React.FC = () => {
             </div>
 
             <div className="p-4 rounded-2xl bg-slate-50 border border-slate-100 mb-5 text-center">
-              <span className="text-xs text-slate-500">Total Table Payable Amount</span>
+              <span className="text-xs text-slate-500">Payable Amount</span>
               <div className="text-2xl font-black text-rose-600 mt-0.5">
-                ₹{(((order.session_subtotal_paise || order.subtotal_paise)) / 100).toFixed(2)}
+                ₹{(totalUnpaidPaise / 100).toFixed(2)}
               </div>
-              {order.session_subtotal_paise && order.session_subtotal_paise !== order.subtotal_paise && (
+              {hasMultipleOrders && (
                 <div className="text-[11px] text-slate-500 mt-1">
-                  Settles all orders on Table {order.table_number ? String(order.table_number).replace(/^T-0?/, '') : ''}
+                  Settles unpaid orders on Table {displayTable}
                 </div>
               )}
             </div>
@@ -452,20 +639,22 @@ export const CustomerOrderTracking: React.FC = () => {
         isOpen={isReceiptOpen}
         onClose={() => setIsReceiptOpen(false)}
         receipt={
-          order
+          activeReceiptOrder
             ? {
-                orderNumber: order.order_number,
-                roundNumber: order.round_number,
+                orderNumber: activeReceiptOrder.order_number,
+                roundNumber: activeReceiptOrder.round_number,
                 tableNumber: order.table_number,
                 orderType: order.order_type || 'dine_in',
-                createdAt: order.created_at,
-                items: order.items || [],
-                subtotal_paise: order.subtotal_paise || 0,
-                tax_paise: Math.round((order.subtotal_paise || 0) * 0.05),
-                grand_total_paise: Math.round((order.subtotal_paise || 0) * 1.05),
-                paymentMethod: isOrderPaid ? (order.payment_method || 'Online / Cash') : 'Pending',
-                isOnlinePayment: Boolean(order.payment_method?.includes('online') || order.receipt_token),
-                transactionReference: order.receipt_token ? `TXN-${order.receipt_token.substring(0, 8).toUpperCase()}` : undefined
+                createdAt: activeReceiptOrder.created_at,
+                items: activeReceiptOrder.items || [],
+                subtotal_paise: activeReceiptOrder.subtotal_paise || 0,
+                tax_paise: Math.round((activeReceiptOrder.subtotal_paise || 0) * 0.05),
+                grand_total_paise: Math.round((activeReceiptOrder.subtotal_paise || 0) * 1.05),
+                paymentMethod: activeReceiptOrder.is_paid ? 'Online / Cash' : 'Pending',
+                isOnlinePayment: Boolean(activeReceiptOrder.bill?.receipt_token_hash || order.receipt_token),
+                transactionReference: activeReceiptOrder.bill?.receipt_token_hash
+                  ? `TXN-${activeReceiptOrder.bill.receipt_token_hash.substring(0, 8).toUpperCase()}`
+                  : undefined
               }
             : null
         }

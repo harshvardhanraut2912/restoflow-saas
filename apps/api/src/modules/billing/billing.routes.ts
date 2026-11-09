@@ -358,13 +358,23 @@ billingRouter.post('/customer/pay', resolveTenant, async (req: Request, res: Res
 
   try {
     const result = await withTransaction(async (client) => {
-      // 1. Check if bill already generated
-      let billRes = await client.query(
-        `SELECT * FROM bills 
-         WHERE restaurant_id = $1 AND (order_id = $2 OR (table_session_id = $3 AND $3 IS NOT NULL))
-         ORDER BY created_at DESC LIMIT 1`,
-        [restaurant.id, order_id || null, table_session_id || null]
-      );
+      // 1. Check if bill already generated for this specific order or an unpaid bill for this session
+      let billRes;
+      if (order_id) {
+        billRes = await client.query(
+          `SELECT * FROM bills 
+           WHERE restaurant_id = $1 AND order_id = $2
+           ORDER BY created_at DESC LIMIT 1`,
+          [restaurant.id, order_id]
+        );
+      } else {
+        billRes = await client.query(
+          `SELECT * FROM bills 
+           WHERE restaurant_id = $1 AND table_session_id = $2 AND status = 'unpaid'
+           ORDER BY created_at DESC LIMIT 1`,
+          [restaurant.id, table_session_id]
+        );
+      }
 
       let bill = billRes.rows[0];
 
@@ -384,28 +394,32 @@ billingRouter.post('/customer/pay', resolveTenant, async (req: Request, res: Res
         let subtotalPaise = 0;
         let packagingChargePaise = 0;
 
-        if (table_session_id) {
-          const itemsRes = await client.query(
-            `SELECT oi.total_price_paise 
-             FROM order_items oi
-             JOIN orders o ON o.id = oi.order_id
-             WHERE o.table_session_id = $1 AND o.status NOT IN ('cancelled', 'rejected')`,
-            [table_session_id]
-          );
-          for (const item of itemsRes.rows) {
-            subtotalPaise += item.total_price_paise;
-          }
-        } else {
+        if (order_id) {
           const oRes = await client.query('SELECT * FROM orders WHERE id = $1', [order_id]);
           if (oRes.rows.length === 0) throw new Error('Order not found.');
           subtotalPaise = oRes.rows[0].subtotal_paise;
           if (oRes.rows[0].order_type === 'takeaway') {
             packagingChargePaise = settings.packaging_charge_paise || 0;
           }
+        } else if (table_session_id) {
+          const itemsRes = await client.query(
+            `SELECT oi.total_price_paise 
+             FROM order_items oi
+             JOIN orders o ON o.id = oi.order_id
+             WHERE o.table_session_id = $1 AND o.status NOT IN ('cancelled', 'rejected', 'completed')`,
+            [table_session_id]
+          );
+          for (const item of itemsRes.rows) {
+            subtotalPaise += item.total_price_paise;
+          }
         }
 
         if (subtotalPaise === 0) {
-          throw new Error('Cannot pay bill for 0 items.');
+          return {
+            already_paid: true,
+            is_fully_paid: true,
+            message: 'All orders on this table have already been settled.'
+          };
         }
 
         const taxPercent = Number(settings.tax_rate_percent || 5);
@@ -456,9 +470,32 @@ billingRouter.post('/customer/pay', resolveTenant, async (req: Request, res: Res
       // Mark Bill Settled & Paid
       await client.query(`UPDATE bills SET status = 'paid', settled_at = now() WHERE id = $1`, [bill.id]);
 
-      // Complete orders and ensure table gets empty & unoccupied
+      // Complete orders and ensure table gets empty & unoccupied when all orders done
       let targetTableId: string | null = null;
-      if (table_session_id) {
+      if (order_id) {
+        await client.query(
+          `UPDATE orders SET status = 'completed', updated_at = now() 
+           WHERE id = $1 AND status NOT IN ('cancelled', 'rejected')`,
+          [order_id]
+        );
+        const oCheck = await client.query('SELECT table_id, table_session_id FROM orders WHERE id = $1', [order_id]);
+        if (oCheck.rows.length > 0) {
+          targetTableId = oCheck.rows[0].table_id;
+          const targetSessionId = oCheck.rows[0].table_session_id;
+          if (targetSessionId) {
+            const activeRes = await client.query(
+              `SELECT COUNT(*) FROM orders WHERE table_session_id = $1 AND status NOT IN ('cancelled', 'rejected', 'completed')`,
+              [targetSessionId]
+            );
+            if (parseInt(activeRes.rows[0].count, 10) === 0) {
+              await client.query(`UPDATE table_sessions SET status = 'closed', closed_at = now() WHERE id = $1`, [targetSessionId]);
+              if (targetTableId) {
+                await client.query(`UPDATE dining_tables SET status = 'available' WHERE id = $1`, [targetTableId]);
+              }
+            }
+          }
+        }
+      } else if (table_session_id) {
         await client.query(
           `UPDATE orders SET status = 'completed', updated_at = now() 
            WHERE table_session_id = $1 AND status NOT IN ('cancelled', 'rejected')`,
@@ -470,40 +507,8 @@ billingRouter.post('/customer/pay', resolveTenant, async (req: Request, res: Res
         );
         if (sRes.rows.length > 0) {
           targetTableId = sRes.rows[0].table_id;
+          await client.query(`UPDATE dining_tables SET status = 'available' WHERE id = $1`, [targetTableId]);
         }
-      }
-
-      if (order_id) {
-        await client.query(
-          `UPDATE orders SET status = 'completed', updated_at = now() 
-           WHERE id = $1 AND status NOT IN ('cancelled', 'rejected')`,
-          [order_id]
-        );
-        if (!targetTableId) {
-          const oCheck = await client.query('SELECT table_id, table_session_id FROM orders WHERE id = $1', [order_id]);
-          if (oCheck.rows.length > 0) {
-            targetTableId = oCheck.rows[0].table_id;
-            if (oCheck.rows[0].table_session_id) {
-              await client.query(
-                `UPDATE table_sessions SET status = 'closed', closed_at = now() WHERE id = $1`,
-                [oCheck.rows[0].table_session_id]
-              );
-            }
-          }
-        }
-      }
-
-      // Guarantee table gets completely empty & unoccupied
-      if (targetTableId) {
-        await client.query(
-          `UPDATE table_sessions SET status = 'closed', closed_at = COALESCE(closed_at, now()) 
-           WHERE table_id = $1 AND status != 'closed'`,
-          [targetTableId]
-        );
-        await client.query(
-          `UPDATE dining_tables SET status = 'available' WHERE id = $1`,
-          [targetTableId]
-        );
       }
 
       return {
