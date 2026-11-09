@@ -138,33 +138,20 @@ kitchenRouter.delete('/tickets/:id', resolveTenant, requireStaff(['kitchen', 'ma
 
   try {
     const cancelled = await withTransaction(async (client) => {
-      // 1. Update ticket to cancelled (or delete from active kitchen queue)
-      let ticket: any;
-      try {
-        const tRes = await client.query(
-          `UPDATE kitchen_tickets 
-           SET status = 'cancelled'
-           WHERE id = $1 AND restaurant_id = $2
-           RETURNING *`,
-          [id, restaurant.id]
-        );
-        if (tRes.rows.length > 0) {
-          ticket = tRes.rows[0];
-        }
-      } catch (cErr) {
-        // Fallback: delete row from active kitchen queue
-        const delRes = await client.query(
-          `DELETE FROM kitchen_tickets WHERE id = $1 AND restaurant_id = $2 RETURNING *`,
-          [id, restaurant.id]
-        );
-        if (delRes.rows.length > 0) {
-          ticket = delRes.rows[0];
-        }
-      }
+      // 1. Update ticket to cancelled
+      const tRes = await client.query(
+        `UPDATE kitchen_tickets 
+         SET status = 'cancelled'
+         WHERE id = $1 AND restaurant_id = $2
+         RETURNING *`,
+        [id, restaurant.id]
+      );
 
-      if (!ticket) {
+      if (tRes.rows.length === 0) {
         throw new Error('Ticket not found or already cancelled.');
       }
+
+      const ticket = tRes.rows[0];
 
       // 2. Update order to cancelled and append reason to notes
       await client.query(

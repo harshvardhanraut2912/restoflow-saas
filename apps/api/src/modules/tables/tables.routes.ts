@@ -21,7 +21,16 @@ tablesRouter.get('/', resolveTenant, requireStaff(['manager', 'waiter']), async 
         dt.capacity,
         dt.is_active,
         dt.created_at,
-        CASE WHEN ts.id IS NULL THEN 'available' ELSE dt.status END as status,
+        CASE 
+          WHEN EXISTS (
+            SELECT 1 FROM orders o 
+            WHERE o.table_id = dt.id 
+              AND o.restaurant_id = dt.restaurant_id 
+              AND o.status NOT IN ('completed', 'cancelled', 'rejected')
+          ) THEN 'occupied'
+          WHEN dt.status = 'occupied' AND ts.id IS NOT NULL AND ts.status != 'closed' THEN 'occupied'
+          ELSE 'available'
+        END as status,
         ts.id as active_session_id,
         ts.status as session_status,
         ts.opened_at as session_opened_at,
@@ -170,12 +179,46 @@ tablesRouter.patch('/:id/status', resolveTenant, requireStaff(['manager', 'waite
         return null;
       }
 
-      // If clearing/setting table to available, close any open table sessions
+      // If clearing/setting table to available, completely delete active orders, unpaid bills, and close sessions
       if (status === 'available') {
+        // 1. Delete unpaid bills linked to this table or its sessions
+        await client.query(
+          `DELETE FROM bills 
+           WHERE restaurant_id = $1 AND (
+             table_session_id IN (SELECT id FROM table_sessions WHERE table_id = $2 AND restaurant_id = $1)
+             OR order_id IN (
+               SELECT id FROM orders 
+               WHERE restaurant_id = $1 AND (
+                 table_id = $2 OR table_session_id IN (SELECT id FROM table_sessions WHERE table_id = $2 AND restaurant_id = $1)
+               ) AND status != 'completed'
+             )
+           ) AND status != 'paid'`,
+          [restaurant.id, id]
+        );
+
+        // 2. Completely delete all active/uncompleted orders linked to this table
+        // (cascades automatically to order_items, order_item_modifiers, kitchen_tickets)
+        await client.query(
+          `DELETE FROM orders 
+           WHERE restaurant_id = $1 AND (
+             table_id = $2 OR table_session_id IN (SELECT id FROM table_sessions WHERE table_id = $2 AND restaurant_id = $1)
+           ) AND status != 'completed'`,
+          [restaurant.id, id]
+        );
+
+        // 3. Close any open sessions on this table
         await client.query(
           `UPDATE table_sessions 
            SET status = 'closed', closed_at = now() 
            WHERE table_id = $1 AND restaurant_id = $2 AND status != 'closed'`,
+          [id, restaurant.id]
+        );
+
+        // 4. Resolve any pending guest service requests on this table
+        await client.query(
+          `UPDATE service_requests 
+           SET status = 'resolved', resolved_at = now() 
+           WHERE table_id = $1 AND restaurant_id = $2 AND status = 'pending'`,
           [id, restaurant.id]
         );
       }

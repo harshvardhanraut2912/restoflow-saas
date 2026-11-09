@@ -168,6 +168,8 @@ export const waiterApi = {
     apiRequest('/billing/payments', { method: 'POST', body: JSON.stringify(data) }),
   updateTableStatus: (tableId: string, status: string) =>
     apiRequest(`/tables/${tableId}/status`, { method: 'PATCH', body: JSON.stringify({ status }) }),
+  deleteOrder: (id: string) =>
+    apiRequest(`/orders/${id}`, { method: 'DELETE' }),
 };
 
 // Kitchen APIs

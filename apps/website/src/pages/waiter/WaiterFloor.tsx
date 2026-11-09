@@ -14,7 +14,8 @@ import {
   CreditCard,
   QrCode,
   Printer,
-  X
+  X,
+  Trash2
 } from 'lucide-react';
 import { waiterApi, publicApi, ApiError } from '../../services/api.js';
 import { useStaffAuth } from '../../context/StaffAuthContext.js';
@@ -113,7 +114,7 @@ export const WaiterFloor: React.FC = () => {
 
   const handleSetTableAvailable = async (tableId: string, tableNumber: string, e?: React.MouseEvent) => {
     if (e) e.stopPropagation();
-    if (!window.confirm(`Set Table ${tableNumber} to Empty / Available? This will close any current session on this table.`)) {
+    if (!window.confirm(`Set Table ${tableNumber} to Empty / Available?\n\nThis will clear the table, close the active session, and completely delete any active orders for Table ${tableNumber} from the kitchen and waiter boards.`)) {
       return;
     }
 
@@ -126,6 +127,28 @@ export const WaiterFloor: React.FC = () => {
       loadData();
     } catch (err: any) {
       alert(err.message || 'Failed to update table status.');
+    }
+  };
+
+  const handleDeleteOrder = async (orderId: string, orderNumber: string, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    if (!window.confirm(`Are you sure you want to completely delete Order ${orderNumber}?\n\nThis will remove the order from the database, kitchen, and manager panels.`)) {
+      return;
+    }
+
+    try {
+      await waiterApi.deleteOrder(orderId);
+      loadData();
+      if (selectedTable?.active_session_id) {
+        try {
+          const bill = await waiterApi.getSessionBill(selectedTable.active_session_id);
+          setSessionBill(bill.summary);
+        } catch {
+          setSessionBill(null);
+        }
+      }
+    } catch (err: any) {
+      alert(err.message || 'Failed to delete order.');
     }
   };
 
@@ -474,14 +497,24 @@ export const WaiterFloor: React.FC = () => {
                       )}
                     </div>
 
-                    {/* Mark as Served Button */}
-                    <button
-                      onClick={() => handleMarkServed(o.id)}
-                      className="w-full bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 active:scale-98 text-white font-black py-3.5 rounded-2xl text-sm transition-all shadow-lg shadow-emerald-900/40 flex items-center justify-center gap-2"
-                    >
-                      <CheckCircle className="w-5 h-5" />
-                      Mark as Served
-                    </button>
+                    {/* Mark as Served & Delete Actions */}
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => handleMarkServed(o.id)}
+                        className="flex-1 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 active:scale-98 text-white font-black py-3.5 rounded-2xl text-sm transition-all shadow-lg shadow-emerald-900/40 flex items-center justify-center gap-2"
+                      >
+                        <CheckCircle className="w-5 h-5" />
+                        Mark as Served
+                      </button>
+                      <button
+                        onClick={(e) => handleDeleteOrder(o.id, o.order_number, e)}
+                        className="px-3.5 py-3.5 rounded-2xl border border-rose-300 dark:border-rose-900/60 text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 active:scale-98 font-bold text-xs flex items-center gap-1 transition-colors shrink-0"
+                        title="Delete & Void Order Completely"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                        Delete
+                      </button>
+                    </div>
                   </div>
                 ))}
               </div>
@@ -519,6 +552,14 @@ export const WaiterFloor: React.FC = () => {
                       >
                         <Printer className="w-3 h-3 text-rose-500" />
                         Receipt
+                      </button>
+                      <button
+                        onClick={(e) => handleDeleteOrder(o.id, o.order_number, e)}
+                        className="px-2 py-0.5 rounded-lg bg-rose-50 hover:bg-rose-100 dark:bg-rose-950/40 dark:hover:bg-rose-900/60 text-rose-600 dark:text-rose-400 font-semibold text-[10px] flex items-center gap-1 transition-colors"
+                        title="Delete & Void Order Completely"
+                      >
+                        <Trash2 className="w-3 h-3 text-rose-500" />
+                        Delete
                       </button>
                     </div>
                   </div>
@@ -646,10 +687,10 @@ export const WaiterFloor: React.FC = () => {
             {(selectedTable.status === 'occupied' || selectedTable.active_session_id) && (
               <button
                 onClick={() => handleSetTableAvailable(selectedTable.id, selectedTable.table_number)}
-                className="w-full bg-slate-100 hover:bg-emerald-50 dark:bg-slate-850 dark:hover:bg-emerald-950/40 text-slate-700 hover:text-emerald-700 dark:text-slate-300 dark:hover:text-emerald-300 border border-slate-200 dark:border-slate-800 hover:border-emerald-500/40 font-bold py-3.5 rounded-xl text-xs flex items-center justify-center gap-2 transition-colors"
+                className="w-full bg-rose-50 hover:bg-rose-100 dark:bg-rose-950/40 dark:hover:bg-rose-900/60 text-rose-700 dark:text-rose-300 border border-rose-200 dark:border-rose-900/60 font-bold py-3.5 rounded-xl text-xs flex items-center justify-center gap-2 transition-colors"
               >
-                <CheckCircle className="w-4 h-4 text-emerald-500" />
-                Set Table as Empty / Available
+                <CheckCircle className="w-4 h-4 text-rose-500" />
+                Set Table as Empty (Clear &amp; Delete Orders)
               </button>
             )}
           </div>

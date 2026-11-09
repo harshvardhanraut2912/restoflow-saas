@@ -46,7 +46,19 @@ restaurantRouter.get('/tables', resolveTenant, async (req: Request, res: Respons
         dt.id,
         dt.table_number,
         dt.capacity,
-        dt.status,
+        CASE 
+          WHEN EXISTS (
+            SELECT 1 FROM orders o 
+            WHERE o.table_id = dt.id 
+              AND o.restaurant_id = dt.restaurant_id 
+              AND o.status NOT IN ('completed', 'cancelled', 'rejected')
+          ) THEN 'occupied'
+          WHEN dt.status = 'occupied' AND EXISTS (
+            SELECT 1 FROM table_sessions ts 
+            WHERE ts.table_id = dt.id AND ts.status != 'closed'
+          ) THEN 'occupied'
+          ELSE 'available'
+        END as status,
         dt.is_active
        FROM dining_tables dt
        WHERE dt.restaurant_id = $1 AND dt.is_active = true AND dt.status != 'out_of_service'

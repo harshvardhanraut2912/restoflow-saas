@@ -67,6 +67,34 @@ export async function createOrderService(params: {
   const phoneE164 = normalizePhone(phoneRaw);
 
   return await withTransaction(async (client) => {
+    // 0. If dine-in, ensure table session is active and dining table is marked occupied immediately
+    let resolvedSessionId = tableSessionId;
+    if (orderType === 'dine_in' && tableId) {
+      if (!resolvedSessionId) {
+        let activeSession = await client.query(
+          `SELECT id FROM table_sessions 
+           WHERE restaurant_id = $1 AND table_id = $2 AND status != 'closed'
+           ORDER BY opened_at DESC LIMIT 1`,
+          [restaurantId, tableId]
+        );
+        if (activeSession.rows.length === 0) {
+          activeSession = await client.query(
+            `INSERT INTO table_sessions (restaurant_id, table_id, status)
+             VALUES ($1, $2, 'open')
+             RETURNING id`,
+            [restaurantId, tableId]
+          );
+        }
+        resolvedSessionId = activeSession.rows[0].id;
+      }
+
+      // Mark table occupied unconditionally
+      await client.query(
+        `UPDATE dining_tables SET status = 'occupied' WHERE id = $1 AND restaurant_id = $2`,
+        [tableId, restaurantId]
+      );
+    }
+
     // 1. Resolve or Upsert Customer Profile
     let customerRes = await client.query(
       `SELECT * FROM customers WHERE restaurant_id = $1 AND phone_e164 = $2`,
@@ -184,7 +212,7 @@ export async function createOrderService(params: {
         restaurantId,
         orderNumber,
         orderType,
-        orderType === 'dine_in' ? tableSessionId || null : null,
+        orderType === 'dine_in' ? resolvedSessionId || null : null,
         orderType === 'dine_in' ? tableId || null : null,
         customerId,
         phoneE164,
@@ -594,5 +622,62 @@ ordersRouter.patch('/:id/status', resolveTenant, requireStaff(['manager', 'waite
   } catch (err: any) {
     console.error('Update order status error:', err);
     res.status(500).json({ error: 'SERVER_ERROR', message: 'Failed to update order status.' });
+  }
+});
+
+// Delete / Void Order Completely (Removes from DB, Kitchen, and Manager side)
+ordersRouter.delete('/:id', resolveTenant, requireStaff(['manager', 'waiter']), async (req: Request, res: Response) => {
+  const { id } = req.params;
+  const restaurant = req.restaurant!;
+
+  try {
+    const deletedInfo = await withTransaction(async (client) => {
+      // 1. Delete unpaid bills linked to this order
+      await client.query(
+        `DELETE FROM bills WHERE restaurant_id = $1 AND order_id = $2 AND status != 'paid'`,
+        [restaurant.id, id]
+      );
+
+      // 2. Delete the order (cascades to order_items, order_item_modifiers, kitchen_tickets)
+      const oRes = await client.query(
+        `DELETE FROM orders WHERE id = $1 AND restaurant_id = $2 RETURNING table_id, table_session_id`,
+        [id, restaurant.id]
+      );
+
+      if (oRes.rows.length === 0) {
+        throw new Error('Order not found or already deleted.');
+      }
+
+      const deletedOrder = oRes.rows[0];
+
+      // 3. If dine-in, check if table has any remaining active orders
+      if (deletedOrder.table_id) {
+        const remaining = await client.query(
+          `SELECT COUNT(*) FROM orders 
+           WHERE table_id = $1 AND restaurant_id = $2 AND status NOT IN ('completed', 'cancelled', 'rejected')`,
+          [deletedOrder.table_id, restaurant.id]
+        );
+
+        if (parseInt(remaining.rows[0].count, 10) === 0) {
+          await client.query(
+            `UPDATE dining_tables SET status = 'available' WHERE id = $1 AND restaurant_id = $2`,
+            [deletedOrder.table_id, restaurant.id]
+          );
+          if (deletedOrder.table_session_id) {
+            await client.query(
+              `UPDATE table_sessions SET status = 'closed', closed_at = now() WHERE id = $1`,
+              [deletedOrder.table_session_id]
+            );
+          }
+        }
+      }
+
+      return deletedOrder;
+    });
+
+    res.json({ success: true, message: 'Order completely deleted from the database.', order: deletedInfo });
+  } catch (err: any) {
+    console.error('Delete order error:', err);
+    res.status(500).json({ error: 'SERVER_ERROR', message: err.message || 'Failed to delete order.' });
   }
 });
