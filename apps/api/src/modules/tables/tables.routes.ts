@@ -15,14 +15,28 @@ tablesRouter.get('/', resolveTenant, requireStaff(['manager', 'waiter']), async 
   try {
     const result = await query(
       `SELECT 
-        dt.*,
+        dt.id,
+        dt.restaurant_id,
+        dt.table_number,
+        dt.capacity,
+        dt.is_active,
+        dt.created_at,
+        CASE WHEN ts.id IS NULL THEN 'available' ELSE dt.status END as status,
         ts.id as active_session_id,
         ts.status as session_status,
         ts.opened_at as session_opened_at,
         tqr.token_hash as active_qr_hash
        FROM dining_tables dt
-       LEFT JOIN table_sessions ts ON ts.table_id = dt.id AND ts.status != 'closed'
-       LEFT JOIN table_qr_tokens tqr ON tqr.table_id = dt.id AND tqr.is_revoked = false
+       LEFT JOIN LATERAL (
+         SELECT id, status, opened_at FROM table_sessions 
+         WHERE table_id = dt.id AND status != 'closed'
+         ORDER BY opened_at DESC LIMIT 1
+       ) ts ON true
+       LEFT JOIN LATERAL (
+         SELECT token_hash FROM table_qr_tokens 
+         WHERE table_id = dt.id AND is_revoked = false
+         ORDER BY created_at DESC LIMIT 1
+       ) tqr ON true
        WHERE dt.restaurant_id = $1 AND dt.is_active = true
        ORDER BY dt.table_number ASC`,
       [restaurant.id]
@@ -93,11 +107,12 @@ tablesRouter.post('/:id/qr', resolveTenant, requireStaff(['manager']), async (re
     const tokenHash = crypto.createHash('sha256').update(rawToken).digest('hex');
 
     await withTransaction(async (client) => {
-      // Revoke previous tokens
+      // Revoke previous tokens (preserving deterministic demo token for local testing/dev)
+      const demoHash = crypto.createHash('sha256').update('demo_token_table_1_royalspice').digest('hex');
       await client.query(
         `UPDATE table_qr_tokens SET is_revoked = true 
-         WHERE table_id = $1 AND restaurant_id = $2`,
-        [id, restaurant.id]
+         WHERE table_id = $1 AND restaurant_id = $2 AND token_hash != $3`,
+        [id, restaurant.id, demoHash]
       );
 
       // Insert new active token

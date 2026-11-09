@@ -272,8 +272,8 @@ export const WaiterFloor: React.FC = () => {
 
             <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
               {tables.map((table) => {
-                const isOccupied = table.status === 'occupied' || !!table.active_session_id;
-                const isBillRequested = table.session_status === 'bill_requested';
+                const isOccupied = table.status === 'occupied' && !!table.active_session_id;
+                const isBillRequested = isOccupied && table.session_status === 'bill_requested';
 
                 return (
                   <button
@@ -302,8 +302,8 @@ export const WaiterFloor: React.FC = () => {
 
                     <div className="space-y-1 text-xs text-slate-400">
                       <div>Capacity: {table.capacity} Guests</div>
-                      <div className="font-semibold text-slate-200">
-                        {isBillRequested ? 'Bill Requested' : isOccupied ? 'Dining in Progress' : 'Ready / Empty'}
+                      <div className={`font-semibold ${isOccupied ? 'text-amber-400' : 'text-emerald-400'}`}>
+                        {isBillRequested ? 'Bill Requested' : isOccupied ? 'Dining in Progress' : 'Empty / Available'}
                       </div>
                     </div>
                   </button>
@@ -522,8 +522,12 @@ export const WaiterFloor: React.FC = () => {
                 </div>
               </div>
             ) : (
-              <div className="py-12 text-center text-slate-500 text-xs">
-                No active orders at this table yet.
+              <div className="py-12 text-center text-slate-400 text-xs space-y-2">
+                <div className="w-12 h-12 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 flex items-center justify-center mx-auto mb-2">
+                  <CheckCircle className="w-6 h-6" />
+                </div>
+                <div className="font-bold text-white text-sm">Table {selectedTable.table_number} is Empty</div>
+                <p className="text-slate-500 text-[11px]">This table is unoccupied and ready for new guests.</p>
               </div>
             )}
           </div>

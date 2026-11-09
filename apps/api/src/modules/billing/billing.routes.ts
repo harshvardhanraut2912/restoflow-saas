@@ -243,25 +243,55 @@ billingRouter.post('/payments', resolveTenant, requireStaff(['waiter', 'manager'
       if (totalPaid >= bill.grand_total_paise) {
         await client.query(`UPDATE bills SET status = 'paid', settled_at = now() WHERE id = $1`, [bill.id]);
 
-        // Complete orders
-        if (bill.table_session_id) {
+        // 1. Identify target table and session
+        let targetTableId: string | null = null;
+        const targetSessionId = bill.table_session_id;
+
+        if (targetSessionId) {
           await client.query(
             `UPDATE orders SET status = 'completed', updated_at = now() 
              WHERE table_session_id = $1 AND status NOT IN ('cancelled', 'rejected')`,
-            [bill.table_session_id]
+            [targetSessionId]
           );
           const sessionRes = await client.query(
             `UPDATE table_sessions SET status = 'closed', closed_at = now() WHERE id = $1 RETURNING table_id`,
-            [bill.table_session_id]
+            [targetSessionId]
           );
           if (sessionRes.rows.length > 0) {
-            await client.query(`UPDATE dining_tables SET status = 'available' WHERE id = $1`, [sessionRes.rows[0].table_id]);
+            targetTableId = sessionRes.rows[0].table_id;
           }
-        } else if (bill.order_id) {
+        }
+
+        if (bill.order_id) {
           await client.query(
             `UPDATE orders SET status = 'completed', updated_at = now() 
              WHERE id = $1 AND status NOT IN ('cancelled', 'rejected')`,
             [bill.order_id]
+          );
+          if (!targetTableId) {
+            const ordRes = await client.query('SELECT table_id, table_session_id FROM orders WHERE id = $1', [bill.order_id]);
+            if (ordRes.rows.length > 0) {
+              targetTableId = ordRes.rows[0].table_id;
+              if (ordRes.rows[0].table_session_id) {
+                await client.query(
+                  `UPDATE table_sessions SET status = 'closed', closed_at = now() WHERE id = $1`,
+                  [ordRes.rows[0].table_session_id]
+                );
+              }
+            }
+          }
+        }
+
+        // Table gets completely empty & unoccupied
+        if (targetTableId) {
+          await client.query(
+            `UPDATE table_sessions SET status = 'closed', closed_at = COALESCE(closed_at, now()) 
+             WHERE table_id = $1 AND status != 'closed'`,
+            [targetTableId]
+          );
+          await client.query(
+            `UPDATE dining_tables SET status = 'available' WHERE id = $1`,
+            [targetTableId]
           );
         }
 
@@ -426,7 +456,8 @@ billingRouter.post('/customer/pay', resolveTenant, async (req: Request, res: Res
       // Mark Bill Settled & Paid
       await client.query(`UPDATE bills SET status = 'paid', settled_at = now() WHERE id = $1`, [bill.id]);
 
-      // Complete orders
+      // Complete orders and ensure table gets empty & unoccupied
+      let targetTableId: string | null = null;
       if (table_session_id) {
         await client.query(
           `UPDATE orders SET status = 'completed', updated_at = now() 
@@ -438,13 +469,40 @@ billingRouter.post('/customer/pay', resolveTenant, async (req: Request, res: Res
           [table_session_id]
         );
         if (sRes.rows.length > 0) {
-          await client.query(`UPDATE dining_tables SET status = 'available' WHERE id = $1`, [sRes.rows[0].table_id]);
+          targetTableId = sRes.rows[0].table_id;
         }
-      } else if (order_id) {
+      }
+
+      if (order_id) {
         await client.query(
           `UPDATE orders SET status = 'completed', updated_at = now() 
            WHERE id = $1 AND status NOT IN ('cancelled', 'rejected')`,
           [order_id]
+        );
+        if (!targetTableId) {
+          const oCheck = await client.query('SELECT table_id, table_session_id FROM orders WHERE id = $1', [order_id]);
+          if (oCheck.rows.length > 0) {
+            targetTableId = oCheck.rows[0].table_id;
+            if (oCheck.rows[0].table_session_id) {
+              await client.query(
+                `UPDATE table_sessions SET status = 'closed', closed_at = now() WHERE id = $1`,
+                [oCheck.rows[0].table_session_id]
+              );
+            }
+          }
+        }
+      }
+
+      // Guarantee table gets completely empty & unoccupied
+      if (targetTableId) {
+        await client.query(
+          `UPDATE table_sessions SET status = 'closed', closed_at = COALESCE(closed_at, now()) 
+           WHERE table_id = $1 AND status != 'closed'`,
+          [targetTableId]
+        );
+        await client.query(
+          `UPDATE dining_tables SET status = 'available' WHERE id = $1`,
+          [targetTableId]
         );
       }
 
