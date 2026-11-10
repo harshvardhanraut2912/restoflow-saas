@@ -74,24 +74,27 @@ export const CustomerOrderTracking: React.FC = () => {
     return () => clearInterval(interval);
   }, [orderId, token]);
 
-  const handleCallWaiter = async () => {
+  // Instant feedback: show "waiter called" immediately, send the request in the background.
+  // If the server rejects it, the message is withdrawn and the guest is told.
+  const handleCallWaiter = () => {
     if (!order) return;
-    setIsCallingWaiter(true);
-    try {
-      await customerApi.requestService({
+    const tableLabel = order.table_number ? String(order.table_number).replace(/^T-0?/, '') : '';
+    setWaiterCallSuccess(`Floor captain called for Table ${tableLabel}! Someone is on the way.`);
+    setIsPayingOnline(false);
+    setTimeout(() => setWaiterCallSuccess(null), 8000);
+
+    customerApi
+      .requestService({
         order_id: order.id,
         table_id: order.table_id,
         table_session_id: order.table_session_id,
         request_type: 'waiter',
-        notes: `Customer called waiter from Table ${order.table_number ? String(order.table_number).replace(/^T-0?/, '') : ''}`
+        notes: `Customer called waiter from Table ${tableLabel}`
+      })
+      .catch((err: any) => {
+        setWaiterCallSuccess(null);
+        alert(err?.message || 'Failed to call waiter. Please try again.');
       });
-      setWaiterCallSuccess(`Floor captain called for Table ${order.table_number ? String(order.table_number).replace(/^T-0?/, '') : ''}! Someone is on the way.`);
-      setTimeout(() => setWaiterCallSuccess(null), 8000);
-    } catch (err: any) {
-      alert(err.message || 'Failed to call waiter.');
-    } finally {
-      setIsCallingWaiter(false);
-    }
   };
 
   const handleCustomerPayOnline = async () => {
@@ -215,10 +218,16 @@ export const CustomerOrderTracking: React.FC = () => {
   const hasMultipleOrders = sessionOrders.length >= 2;
 
   // Total session statistics
-  const totalSubtotalPaise = order.session_subtotal_paise || order.subtotal_paise || 0;
-  const totalUnpaidPaise = typeof order.session_unpaid_paise === 'number'
-    ? order.session_unpaid_paise
-    : (order.is_paid ? 0 : (order.subtotal_paise || 0));
+  // Money comes from the server's single table ledger: Total = whole bill, Paid = already settled,
+  // Unpaid = what is still owed (new dishes only, when the earlier part was already paid).
+  const hasLedger = typeof order.session_total_paise === 'number' && order.session_total_paise > 0;
+  const totalSubtotalPaise = hasLedger
+    ? order.session_total_paise
+    : Math.round((order.subtotal_paise || 0) * 1.05);
+  const totalPaidPaise = hasLedger ? (order.session_paid_paise || 0) : (order.is_paid ? totalSubtotalPaise : 0);
+  const totalUnpaidPaise = hasLedger
+    ? (order.session_unpaid_paise || 0)
+    : (order.is_paid ? 0 : totalSubtotalPaise);
   const isEverythingPaid = totalUnpaidPaise === 0;
 
   const displayTable = order.table_number ? String(order.table_number).replace(/^T-0?/, '') : '';
@@ -272,7 +281,7 @@ export const CustomerOrderTracking: React.FC = () => {
               </div>
               <div>
                 <div className="font-black text-sm text-emerald-900">PAID • Bill Settled</div>
-                <div className="text-xs text-emerald-700">All orders paid. Thank you!</div>
+                <div className="text-xs text-emerald-700">All orders paid • Total ₹{(totalSubtotalPaise / 100).toFixed(2)}</div>
               </div>
             </div>
             <button
@@ -286,12 +295,15 @@ export const CustomerOrderTracking: React.FC = () => {
               Receipt
             </button>
           </div>
-        ) : totalUnpaidPaise > 0 && hasMultipleOrders ? (
-          <div className="p-5 rounded-3xl bg-rose-50/80 border border-rose-200 text-rose-950 shadow-sm flex items-center justify-between">
+        ) : totalUnpaidPaise > 0 ? (
+          <div className="p-5 rounded-3xl bg-rose-50/80 border border-rose-200 text-rose-950 shadow-sm flex items-center justify-between gap-3">
             <div>
-              <span className="text-[10px] font-bold uppercase tracking-wider text-rose-600">Unpaid Balance</span>
-              <div className="text-xl font-black text-rose-600">₹{(totalUnpaidPaise / 100).toFixed(0)}</div>
-              <div className="text-[11px] text-slate-500 mt-0.5">Table Total: ₹{(totalSubtotalPaise / 100).toFixed(0)}</div>
+              <span className="text-[10px] font-bold uppercase tracking-wider text-rose-600">Unpaid Amount</span>
+              <div className="text-xl font-black text-rose-600">₹{(totalUnpaidPaise / 100).toFixed(2)}</div>
+              <div className="text-[11px] text-slate-500 mt-0.5">
+                Total Bill: ₹{(totalSubtotalPaise / 100).toFixed(2)}
+                {totalPaidPaise > 0 && <> • Paid: ₹{(totalPaidPaise / 100).toFixed(2)}</>}
+              </div>
             </div>
             <button
               onClick={() => setIsPayingOnline(true)}
@@ -315,7 +327,7 @@ export const CustomerOrderTracking: React.FC = () => {
               </p>
             </div>
             <span className="text-xs font-black text-slate-700 font-mono">
-              ₹{(totalSubtotalPaise / 100).toFixed(0)} Total
+              ₹{(totalSubtotalPaise / 100).toFixed(2)} Total
             </span>
           </div>
         )}
@@ -527,11 +539,10 @@ export const CustomerOrderTracking: React.FC = () => {
           {/* Button 1: Call Waiter / Request Service */}
           <button
             onClick={handleCallWaiter}
-            disabled={isCallingWaiter}
             className="w-full bg-amber-500 hover:bg-amber-600 active:scale-98 text-slate-950 font-black py-4 rounded-2xl text-xs flex items-center justify-center gap-2 shadow-lg shadow-amber-500/20 transition-all"
           >
             <Bell className="w-4 h-4" />
-            {isCallingWaiter ? 'Calling Waiter...' : 'Call Waiter / Request Service'}
+            {waiterCallSuccess ? 'Waiter Called ✓' : 'Call Waiter / Request Service'}
           </button>
 
           {/* Button 2: Pay Bill Online (Only shown if NOT all paid yet) */}
@@ -541,7 +552,7 @@ export const CustomerOrderTracking: React.FC = () => {
               className="w-full bg-emerald-600 hover:bg-emerald-500 active:scale-98 text-white font-black py-4 rounded-2xl text-xs flex items-center justify-center gap-2 shadow-lg shadow-emerald-900/20 transition-all"
             >
               <CreditCard className="w-4 h-4" />
-              Pay Bill Online (UPI / Card) • ₹{(totalUnpaidPaise / 100).toFixed(0)}
+              Pay Unpaid Amount Online • ₹{(totalUnpaidPaise / 100).toFixed(2)}
             </button>
           )}
 
@@ -605,9 +616,9 @@ export const CustomerOrderTracking: React.FC = () => {
               <div className="text-2xl font-black text-rose-600 mt-0.5">
                 ₹{(totalUnpaidPaise / 100).toFixed(2)}
               </div>
-              {hasMultipleOrders && (
+              {(hasMultipleOrders || totalPaidPaise > 0) && (
                 <div className="text-[11px] text-slate-500 mt-1">
-                  Settles unpaid orders on Table {displayTable}
+                  Total bill ₹{(totalSubtotalPaise / 100).toFixed(2)}{totalPaidPaise > 0 ? ` • already paid ₹${(totalPaidPaise / 100).toFixed(2)}` : ''}
                 </div>
               )}
             </div>

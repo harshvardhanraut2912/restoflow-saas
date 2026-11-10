@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express';
 import { resolveTenant } from '../../middleware/tenant.js';
 import { requireStaff } from '../../middleware/auth.js';
 import { query } from '../../db/index.js';
+import { WALKIN_PHONE_E164 } from '../billing/billing.utils.js';
 
 export const loyaltyRouter = Router();
 
@@ -25,10 +26,10 @@ loyaltyRouter.get('/customers', resolveTenant, requireStaff(['manager']), async 
        FROM customers c
        LEFT JOIN orders o ON o.customer_id = c.id
        LEFT JOIN bills b ON (b.table_session_id = o.table_session_id OR b.order_id = o.id) AND b.status = 'paid'
-       WHERE c.restaurant_id = $1
+       WHERE c.restaurant_id = $1 AND c.phone_e164 <> $2
        GROUP BY c.id
        ORDER BY c.created_at DESC`,
-      [restaurant.id]
+      [restaurant.id, WALKIN_PHONE_E164]
     );
 
     res.json({ customers: result.rows });

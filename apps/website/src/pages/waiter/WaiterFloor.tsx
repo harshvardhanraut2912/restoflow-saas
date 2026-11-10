@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { 
   Users, 
@@ -22,12 +22,23 @@ import { useStaffAuth } from '../../context/StaffAuthContext.js';
 import { useTenant } from '../../context/TenantContext.js';
 import { ThemeToggle } from '../../components/ThemeToggle.js';
 import { ReceiptModal, ReceiptData } from '../../components/ReceiptModal.js';
+import { FloorMap } from '../../components/FloorMap.js';
+import { WaiterOrderModal } from '../../components/WaiterOrderModal.js';
 
 const formatTableNumber = (val?: string | null) => val ? String(val).replace(/^T-0?/, '') : '';
 
+// Same lifecycle the customer sees: placed -> accepted -> preparing -> ready -> served
+const ORDER_STATUS_STYLE: Record<string, { label: string; cls: string }> = {
+  placed: { label: 'Sent to kitchen', cls: 'bg-slate-500/10 text-slate-600 dark:text-slate-300' },
+  accepted: { label: 'Accepted', cls: 'bg-sky-500/10 text-sky-600 dark:text-sky-400' },
+  preparing: { label: 'Preparing', cls: 'bg-amber-500/10 text-amber-600 dark:text-amber-400' },
+  ready: { label: 'Ready to serve', cls: 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400' },
+  served: { label: 'Served', cls: 'bg-indigo-500/10 text-indigo-600 dark:text-indigo-400' }
+};
+
 export const WaiterFloor: React.FC = () => {
   const { user, logout } = useStaffAuth();
-  const { restaurant } = useTenant();
+  const { restaurant, settings } = useTenant();
   const navigate = useNavigate();
 
   const [activeTab, setActiveTab] = useState<'tables' | 'serve' | 'orders' | 'requests'>('tables');
@@ -36,6 +47,12 @@ export const WaiterFloor: React.FC = () => {
   const [serviceRequests, setServiceRequests] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [activeReceipt, setActiveReceipt] = useState<ReceiptData | null>(null);
+  // Optimistic 'served' marks awaiting server confirmation (orderId -> true)
+  const pendingServed = useRef<Record<string, boolean>>({});
+  // Optimistic 'set empty' tables awaiting server confirmation
+  const pendingEmpty = useRef<Record<string, boolean>>({});
+  // Service requests marked Done locally, hidden instantly until the server confirms
+  const pendingResolved = useRef<Record<string, boolean>>({});
 
   // Orders in 'ready' status awaiting waiter delivery
   const readyOrders = activeOrders.filter((o) => o.status === 'ready');
@@ -47,9 +64,7 @@ export const WaiterFloor: React.FC = () => {
   // Manual Order POS Modal
   const [isOrderingOpen, setIsOrderingOpen] = useState(false);
   const [menuCategories, setMenuCategories] = useState<any[]>([]);
-  const [orderItems, setOrderItems] = useState<{ menuItem: any; quantity: number }[]>([]);
-  const [customerPhone, setCustomerPhone] = useState('9876543210');
-  const [isSubmittingOrder, setIsSubmittingOrder] = useState(false);
+  const [isMenuLoading, setIsMenuLoading] = useState(false);
 
   // Settle Bill Modal
   const [isSettlingBill, setIsSettlingBill] = useState(false);
@@ -63,9 +78,34 @@ export const WaiterFloor: React.FC = () => {
         waiterApi.getOrders(),
         waiterApi.getServiceRequests()
       ]);
-      setTables(tData.tables || []);
-      setActiveOrders(oData.orders || []);
-      setServiceRequests(rData.requests || []);
+      const serverTables: any[] = tData.tables || [];
+      Object.keys(pendingEmpty.current).forEach((id) => {
+        const st = serverTables.find((t) => t.id === id);
+        if (!st || st.status === 'available') delete pendingEmpty.current[id];
+      });
+      setTables(
+        serverTables.map((t) =>
+          pendingEmpty.current[t.id]
+            ? { ...t, status: 'available', active_session_id: null, session_status: null }
+            : t
+        )
+      );
+      // Keep optimistic 'served' state until the server confirms it
+      const serverOrders: any[] = oData.orders || [];
+      Object.keys(pendingServed.current).forEach((id) => {
+        const so = serverOrders.find((o) => o.id === id);
+        if (!so || so.status !== 'ready') delete pendingServed.current[id];
+      });
+      setActiveOrders(
+        serverOrders
+          .filter((o) => !(o.table_id && pendingEmpty.current[o.table_id]))
+          .map((o) => (pendingServed.current[o.id] ? { ...o, status: 'served' } : o))
+      );
+      const serverRequests: any[] = rData.requests || [];
+      Object.keys(pendingResolved.current).forEach((id) => {
+        if (!serverRequests.some((r) => r.id === id)) delete pendingResolved.current[id];
+      });
+      setServiceRequests(serverRequests.filter((r) => !pendingResolved.current[r.id]));
     } catch (err: any) {
       if (err?.status === 401 || err?.status === 403) {
         navigate('/s/login');
@@ -83,6 +123,38 @@ export const WaiterFloor: React.FC = () => {
     return () => clearInterval(interval);
   }, []);
 
+  // ---- Live view of the selected table (updates with every poll) ----
+  const FINAL_STATUSES = ['completed', 'cancelled', 'rejected'];
+  const liveTable = selectedTable ? tables.find((t) => t.id === selectedTable.id) || selectedTable : null;
+  const tableOrders = selectedTable
+    ? activeOrders.filter((o) => o.table_id === selectedTable.id && !FINAL_STATUSES.includes(o.status))
+    : [];
+  const ordersSig = tableOrders.map((o) => `${o.id}:${o.status}`).join('|');
+  const sessionIdLive: string | null =
+    liveTable?.active_session_id || tableOrders.find((o) => o.table_session_id)?.table_session_id || null;
+  const fallbackSubtotal = tableOrders.reduce((sum, o) => sum + (o.subtotal_paise || 0), 0);
+  const fallbackTotal = Math.round(fallbackSubtotal * (1 + (settings?.tax_rate_percent ?? 5) / 100));
+  // One ledger (from the server): Total bill, Paid so far, Unpaid (= what to collect now)
+  const payTotal: number = sessionBill?.total_paise ?? sessionBill?.grand_total_paise ?? fallbackTotal;
+  const paidSoFar: number = sessionBill?.paid_paise ?? 0;
+  const payUnpaid: number = sessionBill ? (sessionBill.unpaid_paise ?? Math.max(0, payTotal - paidSoFar)) : fallbackTotal;
+
+  useEffect(() => {
+    if (!selectedTable) return;
+    let alive = true;
+    if (!sessionIdLive) {
+      setSessionBill(null);
+      return;
+    }
+    waiterApi
+      .getSessionBill(sessionIdLive)
+      .then((b: any) => alive && setSessionBill(b?.summary || null))
+      .catch(() => alive && setSessionBill(null));
+    return () => {
+      alive = false;
+    };
+  }, [selectedTable?.id, sessionIdLive, ordersSig]);
+
   const handleSelectTable = async (table: any) => {
     setSelectedTable(table);
     setSessionBill(null);
@@ -97,21 +169,33 @@ export const WaiterFloor: React.FC = () => {
   };
 
   const handleMarkServed = async (orderId: string) => {
+    if (pendingServed.current[orderId]) return;
+
+    // Instant UI: mark served right now, sync in background
+    pendingServed.current[orderId] = true;
+    setActiveOrders((prev) => prev.map((o) => (o.id === orderId ? { ...o, status: 'served' } : o)));
+
     try {
       await waiterApi.markServed(orderId);
-      loadData();
     } catch (err: any) {
+      delete pendingServed.current[orderId];
       alert(err.message || 'Failed to mark order as served.');
+      loadData();
     }
   };
 
-  const handleResolveRequest = async (id: string) => {
-    try {
-      await waiterApi.resolveServiceRequest(id);
-      loadData();
-    } catch (err: any) {
-      alert(err.message || 'Failed to resolve request.');
-    }
+  // Instant: the request disappears right away, the server is updated in the background
+  const handleResolveRequest = (id: string) => {
+    if (pendingResolved.current[id]) return;
+    pendingResolved.current[id] = true;
+    const removed = serviceRequests.find((r) => r.id === id);
+    setServiceRequests((prev) => prev.filter((r) => r.id !== id));
+
+    waiterApi.resolveServiceRequest(id).catch((err: any) => {
+      delete pendingResolved.current[id];
+      if (removed) setServiceRequests((prev) => (prev.some((r) => r.id === id) ? prev : [removed, ...prev]));
+      alert(err?.message || 'Failed to resolve request.');
+    });
   };
 
   const handleSetTableAvailable = async (tableId: string, tableNumber: string, e?: React.MouseEvent) => {
@@ -120,15 +204,23 @@ export const WaiterFloor: React.FC = () => {
       return;
     }
 
+    // Instant UI: clear the table right now, sync in background
+    pendingEmpty.current[tableId] = true;
+    setTables((prev) =>
+      prev.map((t) => (t.id === tableId ? { ...t, status: 'available', active_session_id: null, session_status: null } : t))
+    );
+    setActiveOrders((prev) => prev.filter((o) => o.table_id !== tableId));
+    if (selectedTable?.id === tableId) {
+      setSelectedTable(null);
+      setSessionBill(null);
+    }
+
     try {
       await waiterApi.updateTableStatus(tableId, 'available');
-      if (selectedTable?.id === tableId) {
-        setSelectedTable(null);
-        setSessionBill(null);
-      }
-      loadData();
     } catch (err: any) {
+      delete pendingEmpty.current[tableId];
       alert(err.message || 'Failed to update table status.');
+      loadData();
     }
   };
 
@@ -154,51 +246,38 @@ export const WaiterFloor: React.FC = () => {
     }
   };
 
-  const handleOpenPOS = async () => {
-    if (menuCategories.length === 0) {
+  const loadMenu = async () => {
+    setIsMenuLoading(true);
+    try {
       const data = await publicApi.getMenu();
       setMenuCategories(data.categories || []);
-    }
-    setOrderItems([]);
-    setIsOrderingOpen(true);
-  };
-
-  const handleAddPosItem = (item: any) => {
-    const idx = orderItems.findIndex((o) => o.menuItem.id === item.id);
-    if (idx > -1) {
-      const copy = [...orderItems];
-      copy[idx].quantity += 1;
-      setOrderItems(copy);
-    } else {
-      setOrderItems([...orderItems, { menuItem: item, quantity: 1 }]);
-    }
-  };
-
-  const handleSubmitPosOrder = async () => {
-    if (orderItems.length === 0) return;
-    setIsSubmittingOrder(true);
-    try {
-      await waiterApi.createOrder({
-        order_type: 'dine_in',
-        table_id: selectedTable?.id,
-        table_session_id: selectedTable?.active_session_id,
-        phone: customerPhone,
-        items: orderItems.map((o) => ({
-          menu_item_id: o.menuItem.id,
-          quantity: o.quantity
-        }))
-      });
-      setIsOrderingOpen(false);
-      loadData();
-      if (selectedTable?.active_session_id) {
-        const bill = await waiterApi.getSessionBill(selectedTable.active_session_id);
-        setSessionBill(bill.summary);
-      }
-    } catch (err: any) {
-      alert(err.message || 'Failed to place order.');
+    } catch (err) {
+      console.error('Failed to load menu:', err);
     } finally {
-      setIsSubmittingOrder(false);
+      setIsMenuLoading(false);
     }
+  };
+
+  // Prefetch the menu once so the POS opens with the list already in memory
+  useEffect(() => {
+    loadMenu();
+  }, []);
+
+  const handleOpenPOS = () => {
+    // Open instantly; if the menu somehow isn't loaded yet, fetch in background
+    setIsOrderingOpen(true);
+    if (menuCategories.length === 0 && !isMenuLoading) loadMenu();
+  };
+
+  // Order was accepted by the server: kitchen ticket, customer dashboard and table bill are all updated
+  // server-side. Refresh the floor now so the waiter sees it immediately (the drawer's bill reloads
+  // itself because the table's order list changes).
+  const handleOrderPlaced = (result: any) => {
+    setIsOrderingOpen(false);
+    if (result?.table_session_id && selectedTable && !selectedTable.active_session_id) {
+      setSelectedTable({ ...selectedTable, active_session_id: result.table_session_id, status: 'occupied' });
+    }
+    loadData();
   };
 
   const handleOpenOrderReceipt = (o: any) => {
@@ -217,24 +296,53 @@ export const WaiterFloor: React.FC = () => {
   };
 
   const handleSettleBill = async () => {
-    if (!selectedTable?.active_session_id || !sessionBill) return;
+    if (!selectedTable || (!sessionIdLive && tableOrders.length === 0)) return;
     setIsProcessingPayment(true);
     try {
-      // 1. Generate final bill
-      const billRes = await waiterApi.generateBill({
-        table_session_id: selectedTable.active_session_id
-      });
-      // 2. Record payment
-      await waiterApi.recordPayment({
-        bill_id: billRes.bill.id,
-        amount_paise: billRes.bill.grand_total_paise,
-        method: paymentMethod
-      });
+      let invoiceNumber: string | undefined;
+
+      let sessionClosed = false;
+      let unpaidCollected = payUnpaid;
+
+      if (sessionIdLive) {
+        // 1. Open the table's single bill (re-synced with every order on the table)
+        const billRes = await waiterApi.generateBill({ table_session_id: sessionIdLive });
+        invoiceNumber = billRes.bill?.bill_number;
+        unpaidCollected = billRes.unpaid_paise ?? payUnpaid;
+        // 2. Collect ONLY the unpaid part (earlier payments are never charged twice)
+        if (unpaidCollected > 0) {
+          const payRes = await waiterApi.recordPayment({
+            bill_id: billRes.bill.id,
+            amount_paise: unpaidCollected,
+            method: paymentMethod
+          });
+          sessionClosed = Boolean(payRes.session_closed);
+        } else {
+          sessionClosed = false;
+        }
+      } else {
+        // No session bound to these orders: settle each order individually
+        for (const o of tableOrders) {
+          const billRes = await waiterApi.generateBill({ order_id: o.id });
+          if ((billRes.unpaid_paise ?? 1) > 0) {
+            const payRes = await waiterApi.recordPayment({
+              bill_id: billRes.bill.id,
+              amount_paise: billRes.unpaid_paise ?? billRes.bill.grand_total_paise,
+              method: paymentMethod
+            });
+            sessionClosed = sessionClosed || Boolean(payRes.session_closed);
+          }
+          invoiceNumber = invoiceNumber || billRes.bill?.bill_number;
+        }
+      }
 
       const currentBill = sessionBill;
       const currentTable = selectedTable;
+      const currentOrders = tableOrders;
+      // Table only turns empty when everything is served; dishes still cooking keep it occupied
+      if (sessionClosed) pendingEmpty.current[currentTable.id] = true;
       setIsSettlingBill(false);
-      setSelectedTable(null);
+      if (sessionClosed) setSelectedTable(null);
       loadData();
 
       // Auto-open print receipt dialog
@@ -243,12 +351,16 @@ export const WaiterFloor: React.FC = () => {
         tableNumber: currentTable.table_number,
         orderType: 'dine_in',
         createdAt: new Date().toISOString(),
-        items: currentBill?.items || [],
-        subtotal_paise: currentBill?.subtotal_paise || 0,
+        items:
+          currentBill?.items ||
+          currentOrders.flatMap((o) =>
+            (o.items || []).map((it: any) => ({ name_snapshot: it.name, quantity: it.quantity, total_price_paise: 0 }))
+          ),
+        subtotal_paise: currentBill?.subtotal_paise ?? currentOrders.reduce((n, o) => n + (o.subtotal_paise || 0), 0),
         tax_paise: currentBill?.tax_paise,
-        grand_total_paise: currentBill?.grand_total_paise,
+        grand_total_paise: currentBill?.total_paise ?? currentBill?.grand_total_paise ?? payTotal,
         paymentMethod: paymentMethod,
-        invoiceNumber: billRes.bill?.bill_number
+        invoiceNumber
       });
     } catch (err: any) {
       alert(err.message || 'Payment settlement failed.');
@@ -345,78 +457,16 @@ export const WaiterFloor: React.FC = () => {
       <main className="max-w-7xl mx-auto w-full px-6 py-6 flex-1">
         {/* TAB 1: TABLES FLOOR */}
         {activeTab === 'tables' && (
-          <div className="space-y-6">
-            <div className="flex items-center justify-between">
-              <div>
-                <h2 className="text-base font-bold text-slate-900 dark:text-white">Live Floor Table Map</h2>
-                <p className="text-xs text-slate-500 dark:text-slate-400">Tap a table to view running session, add items, or settle bill</p>
-              </div>
-              <div className="flex items-center gap-4 text-xs text-slate-600 dark:text-slate-400">
-                <span className="flex items-center gap-1.5">
-                  <span className="w-3 h-3 rounded-md bg-emerald-500"></span> Available
-                </span>
-                <span className="flex items-center gap-1.5">
-                  <span className="w-3 h-3 rounded-md bg-amber-500"></span> Occupied
-                </span>
-                <span className="flex items-center gap-1.5">
-                  <span className="w-3 h-3 rounded-md bg-indigo-500"></span> Bill Requested
-                </span>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
-              {tables.map((table) => {
-                const isOccupied = table.status === 'occupied' && !!table.active_session_id;
-                const isBillRequested = isOccupied && table.session_status === 'bill_requested';
-
-                return (
-                  <button
-                    key={table.id}
-                    onClick={() => handleSelectTable(table)}
-                    className={`p-5 rounded-3xl border-2 text-left flex flex-col justify-between transition-all active:scale-95 ${
-                      selectedTable?.id === table.id
-                        ? 'ring-4 ring-rose-500/30'
-                        : ''
-                    } ${
-                      isBillRequested
-                        ? 'bg-indigo-50 dark:bg-indigo-950/40 border-indigo-500/80'
-                        : isOccupied
-                        ? 'bg-amber-50 dark:bg-amber-950/30 border-amber-500/60'
-                        : 'bg-white dark:bg-slate-950/60 border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700'
-                    }`}
-                  >
-                    <div className="flex items-center justify-between w-full mb-3">
-                      <span className="text-xl font-black text-slate-900 dark:text-white">
-                        Table {formatTableNumber(table.table_number)}
-                      </span>
-                      <span className={`w-2.5 h-2.5 rounded-full ${
-                        isBillRequested ? 'bg-indigo-400 animate-pulse' : isOccupied ? 'bg-amber-400' : 'bg-emerald-400'
-                      }`} />
-                    </div>
-
-                    <div className="space-y-1 text-xs text-slate-500 dark:text-slate-400">
-                      <div>Capacity: {table.capacity} Guests</div>
-                      <div className={`font-semibold ${isOccupied ? 'text-amber-500 dark:text-amber-400' : 'text-emerald-500 dark:text-emerald-400'}`}>
-                        {isBillRequested ? 'Bill Requested' : isOccupied ? 'Dining in Progress' : 'Empty / Available'}
-                      </div>
-                    </div>
-
-                    {(isOccupied || table.status === 'occupied') && (
-                      <div className="mt-3 pt-2.5 border-t border-amber-200/60 dark:border-amber-900/40 w-full">
-                        <button
-                          type="button"
-                          onClick={(e) => handleSetTableAvailable(table.id, table.table_number, e)}
-                          className="w-full py-1.5 px-2 rounded-xl bg-amber-500/10 hover:bg-emerald-500/20 text-amber-700 dark:text-amber-300 hover:text-emerald-700 dark:hover:text-emerald-300 font-bold text-[11px] flex items-center justify-center gap-1 border border-amber-500/20 hover:border-emerald-500/40 transition-colors"
-                        >
-                          <CheckCircle className="w-3 h-3" /> Set Empty
-                        </button>
-                      </div>
-                    )}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
+          <FloorMap
+            tables={tables}
+            orders={activeOrders}
+            requests={serviceRequests}
+            selectedId={selectedTable?.id}
+            onManage={handleSelectTable}
+            onResolve={handleResolveRequest}
+            onServe={handleMarkServed}
+            onSetEmpty={(t: any) => handleSetTableAvailable(t.id, t.table_number)}
+          />
         )}
 
         {/* TAB 2: SERVE ORDER (READY TICKETS FROM KITCHEN) */}
@@ -506,14 +556,14 @@ export const WaiterFloor: React.FC = () => {
                     <div className="flex items-center gap-2">
                       <button
                         onClick={() => handleMarkServed(o.id)}
-                        className="flex-1 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 active:scale-98 text-white font-black py-3.5 rounded-2xl text-sm transition-all shadow-lg shadow-emerald-900/40 flex items-center justify-center gap-2"
+                        className="flex-1 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 active:scale-[0.98] text-white font-black py-6 rounded-2xl text-xl transition-all shadow-lg shadow-emerald-900/40 flex items-center justify-center gap-3"
                       >
-                        <CheckCircle className="w-5 h-5" />
+                        <CheckCircle className="w-7 h-7" />
                         Mark as Served
                       </button>
                       <button
                         onClick={(e) => handleDeleteOrder(o.id, o.order_number, e)}
-                        className="px-3.5 py-3.5 rounded-2xl border border-rose-300 dark:border-rose-900/60 text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 active:scale-98 font-bold text-xs flex items-center gap-1 transition-colors shrink-0"
+                        className="px-4 py-6 rounded-2xl border border-rose-300 dark:border-rose-900/60 text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 active:scale-98 font-bold text-xs flex items-center gap-1 transition-colors shrink-0"
                         title="Delete & Void Order Completely"
                       >
                         <Trash2 className="w-4 h-4" />
@@ -598,9 +648,9 @@ export const WaiterFloor: React.FC = () => {
 
                     <button
                       onClick={() => handleResolveRequest(req.id)}
-                      className="bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold px-3.5 py-2 rounded-xl transition-all"
+                      className="bg-emerald-600 hover:bg-emerald-500 active:scale-95 text-white text-sm font-black px-6 py-3 rounded-xl transition-all shadow-md shadow-emerald-900/20"
                     >
-                      Resolve
+                      Done ✓
                     </button>
                   </div>
                 ))}
@@ -626,6 +676,35 @@ export const WaiterFloor: React.FC = () => {
                 <X className="w-5 h-5" />
               </button>
             </div>
+
+            {/* Orders & live progress (kitchen -> serve), same statuses the guest sees */}
+            {tableOrders.length > 0 && (
+              <div className="mb-5 space-y-2">
+                <div className="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                  Orders &amp; Progress ({tableOrders.length})
+                </div>
+                <div className="space-y-2 max-h-44 overflow-y-auto pr-1">
+                  {[...tableOrders]
+                    .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime())
+                    .map((o) => {
+                      const st = ORDER_STATUS_STYLE[o.status] || { label: o.status, cls: 'bg-slate-500/10 text-slate-600 dark:text-slate-300' };
+                      return (
+                        <div key={o.id} className="rounded-xl border border-slate-200 dark:border-slate-800 p-2.5 text-[11px] space-y-1">
+                          <div className="flex items-center justify-between">
+                            <span className="font-bold text-slate-900 dark:text-white">
+                              Order {o.round_number || ''} · #{String(o.order_number).replace('#', '').slice(-5)}
+                            </span>
+                            <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase ${st.cls}`}>{st.label}</span>
+                          </div>
+                          <div className="text-slate-500 dark:text-slate-400">
+                            {(o.items || []).map((it: any) => `${it.quantity}x ${it.name}`).join(', ')}
+                          </div>
+                        </div>
+                      );
+                    })}
+                </div>
+              </div>
+            )}
 
             {/* Session Summary */}
             {sessionBill ? (
@@ -654,8 +733,52 @@ export const WaiterFloor: React.FC = () => {
                   </div>
                   <div className="flex justify-between font-bold text-base text-slate-900 dark:text-white pt-2 border-t border-slate-200 dark:border-slate-800">
                     <span>Total Bill</span>
-                    <span className="text-rose-500 dark:text-rose-400">₹{(sessionBill.grand_total_paise / 100).toFixed(2)}</span>
+                    <span>₹{(payTotal / 100).toFixed(2)}</span>
                   </div>
+                  {paidSoFar > 0 && (
+                    <div className="flex justify-between font-semibold text-emerald-600 dark:text-emerald-400">
+                      <span>Already Paid</span>
+                      <span>− ₹{(paidSoFar / 100).toFixed(2)}</span>
+                    </div>
+                  )}
+                  <div className="flex justify-between font-bold text-base text-slate-900 dark:text-white">
+                    <span>Unpaid Amount</span>
+                    <span className={payUnpaid > 0 ? 'text-rose-500 dark:text-rose-400' : 'text-emerald-600 dark:text-emerald-400'}>
+                      {payUnpaid > 0 ? `₹${(payUnpaid / 100).toFixed(2)}` : 'PAID ₹0.00'}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            ) : tableOrders.length > 0 ? (
+              <div className="space-y-4">
+                <div className="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                  Active Orders ({tableOrders.length})
+                </div>
+                <div className="space-y-3 max-h-72 overflow-y-auto pr-1 text-xs">
+                  {tableOrders.map((o) => (
+                    <div key={o.id} className="rounded-xl border border-slate-200 dark:border-slate-800 p-3 space-y-1.5">
+                      <div className="flex items-center justify-between">
+                        <span className="font-bold text-slate-900 dark:text-white">
+                          Order {o.round_number || ''} · #{String(o.order_number).slice(-5)}
+                        </span>
+                        <span className="flex items-center gap-1.5">
+                          <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase ${(ORDER_STATUS_STYLE[o.status] || ORDER_STATUS_STYLE.placed).cls}`}>
+                            {(ORDER_STATUS_STYLE[o.status] || { label: o.status }).label}
+                          </span>
+                          <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase ${o.is_paid ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400' : 'bg-rose-500/10 text-rose-600 dark:text-rose-400'}`}>
+                            {o.is_paid ? 'Paid' : 'Unpaid'}
+                          </span>
+                        </span>
+                      </div>
+                      {(o.items || []).map((it: any, i: number) => (
+                        <div key={i} className="text-slate-700 dark:text-slate-300">{it.quantity}x {it.name}</div>
+                      ))}
+                    </div>
+                  ))}
+                </div>
+                <div className="pt-3 border-t border-slate-200 dark:border-slate-800 flex justify-between font-bold text-base text-slate-900 dark:text-white">
+                  <span>Total Bill (approx)</span>
+                  <span className="text-rose-500 dark:text-rose-400">₹{(fallbackTotal / 100).toFixed(2)}</span>
                 </div>
               </div>
             ) : (
@@ -679,17 +802,17 @@ export const WaiterFloor: React.FC = () => {
               Add Items (Manual Order)
             </button>
 
-            {sessionBill && (
+            {(sessionBill || tableOrders.length > 0) && payUnpaid > 0 && (
               <button
                 onClick={() => setIsSettlingBill(true)}
                 className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-black py-3.5 rounded-xl text-xs flex items-center justify-center gap-2 shadow-lg shadow-emerald-900/30"
               >
                 <DollarSign className="w-4 h-4" />
-                Payment (Collect &amp; Mark 'Paid')
+                Collect Unpaid ₹{(payUnpaid / 100).toFixed(2)} &amp; Mark 'Paid'
               </button>
             )}
 
-            {(selectedTable.status === 'occupied' || selectedTable.active_session_id) && (
+            {(selectedTable.status === 'occupied' || sessionIdLive || tableOrders.length > 0) && (
               <button
                 onClick={() => handleSetTableAvailable(selectedTable.id, selectedTable.table_number)}
                 className="w-full bg-rose-50 hover:bg-rose-100 dark:bg-rose-950/40 dark:hover:bg-rose-900/60 text-rose-700 dark:text-rose-300 border border-rose-200 dark:border-rose-900/60 font-bold py-3.5 rounded-xl text-xs flex items-center justify-center gap-2 transition-colors"
@@ -709,7 +832,11 @@ export const WaiterFloor: React.FC = () => {
             <h3 className="text-base font-bold text-slate-900 dark:text-white mb-1">
               Table {formatTableNumber(selectedTable?.table_number)} Bill Payment
             </h3>
-            <p className="text-xs text-slate-500 dark:text-slate-400 mb-4">Total Amount: ₹{((sessionBill?.grand_total_paise || 0) / 100).toFixed(2)}</p>
+            <div className="text-xs text-slate-500 dark:text-slate-400 mb-4 space-y-0.5">
+              <div>Total Bill: ₹{(payTotal / 100).toFixed(2)}</div>
+              {paidSoFar > 0 && <div>Already Paid: ₹{(paidSoFar / 100).toFixed(2)}</div>}
+              <div className="font-bold text-rose-500 dark:text-rose-400 text-sm">Unpaid (collect now): ₹{(payUnpaid / 100).toFixed(2)}</div>
+            </div>
 
             <div className="space-y-3 mb-6">
               <label className="block text-xs font-semibold text-slate-600 dark:text-slate-300 uppercase tracking-wider">
@@ -768,83 +895,19 @@ export const WaiterFloor: React.FC = () => {
         </div>
       )}
 
-      {/* Manual Order POS Modal */}
-      {isOrderingOpen && (
-        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl max-w-2xl w-full p-6 shadow-2xl max-h-[85vh] flex flex-col">
-            <div className="flex items-center justify-between pb-4 border-b border-slate-200 dark:border-slate-800 mb-4">
-              <div>
-                <h3 className="text-base font-bold text-slate-900 dark:text-white">Manual POS Order</h3>
-                <p className="text-xs text-slate-500 dark:text-slate-400">Add dishes to Table {formatTableNumber(selectedTable?.table_number)}</p>
-              </div>
-              <button onClick={() => setIsOrderingOpen(false)} className="text-slate-400 hover:text-slate-900 dark:hover:text-white">
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            <div className="grid grid-cols-2 gap-4 flex-1 overflow-y-auto mb-4">
-              {/* Menu Column */}
-              <div className="space-y-3 overflow-y-auto pr-2">
-                <div className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase">Available Menu</div>
-                {menuCategories.map((cat) => (
-                  <div key={cat.id} className="space-y-1">
-                    <div className="text-xs font-bold text-slate-900 dark:text-white">{cat.name}</div>
-                    {cat.items.map((item: any) => (
-                      <button
-                        key={item.id}
-                        onClick={() => handleAddPosItem(item)}
-                        className="w-full p-2.5 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700 text-left flex items-center justify-between text-xs transition-colors"
-                      >
-                        <span className="font-semibold text-slate-900 dark:text-white">{item.name}</span>
-                        <span className="font-bold text-rose-500 dark:text-rose-400">₹{(item.base_price_paise / 100).toFixed(0)}</span>
-                      </button>
-                    ))}
-                  </div>
-                ))}
-              </div>
-
-              {/* Selected Items Column */}
-              <div className="bg-slate-50 dark:bg-slate-950 rounded-2xl p-4 border border-slate-200 dark:border-slate-800 flex flex-col justify-between">
-                <div>
-                  <div className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase mb-3">Order Basket</div>
-                  {orderItems.length === 0 ? (
-                    <div className="py-8 text-center text-slate-400 dark:text-slate-600 text-xs">Tap dishes to add</div>
-                  ) : (
-                    <div className="space-y-2 max-h-48 overflow-y-auto">
-                      {orderItems.map((o, idx) => (
-                        <div key={idx} className="flex justify-between items-center text-xs text-slate-700 dark:text-slate-300">
-                          <span>{o.quantity}x {o.menuItem.name}</span>
-                          <span className="font-bold text-slate-900 dark:text-white">₹{((o.menuItem.base_price_paise * o.quantity) / 100).toFixed(0)}</span>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-
-                <div className="pt-3 border-t border-slate-200 dark:border-slate-800 space-y-3">
-                  <div>
-                    <label className="block text-[11px] font-semibold text-slate-500 dark:text-slate-400 mb-1">Customer Mobile</label>
-                    <input
-                      type="tel"
-                      value={customerPhone}
-                      onChange={(e) => setCustomerPhone(e.target.value)}
-                      className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl px-3 py-2 text-xs text-slate-900 dark:text-white"
-                    />
-                  </div>
-
-                  <button
-                    onClick={handleSubmitPosOrder}
-                    disabled={isSubmittingOrder || orderItems.length === 0}
-                    className="w-full bg-rose-600 hover:bg-rose-500 text-white font-bold py-3 rounded-xl text-xs disabled:opacity-50"
-                  >
-                    {isSubmittingOrder ? 'Placing Order...' : 'Send to Kitchen'}
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* Manual Order POS Modal (same order pipeline as the customer QR checkout) */}
+      <WaiterOrderModal
+        isOpen={isOrderingOpen && !!selectedTable}
+        onClose={() => setIsOrderingOpen(false)}
+        tableId={selectedTable?.id || ''}
+        tableLabel={formatTableNumber(selectedTable?.table_number)}
+        sessionId={sessionIdLive}
+        categories={menuCategories}
+        isMenuLoading={isMenuLoading}
+        onReloadMenu={loadMenu}
+        runningTotalPaise={sessionBill?.grand_total_paise ?? (tableOrders.length > 0 ? fallbackTotal : null)}
+        onPlaced={handleOrderPlaced}
+      />
 
       {/* MODAL: BROWSER RECEIPT MAKER / PRINT */}
       <ReceiptModal

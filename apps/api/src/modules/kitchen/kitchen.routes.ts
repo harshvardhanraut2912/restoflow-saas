@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express';
 import { resolveTenant } from '../../middleware/tenant.js';
 import { requireStaff } from '../../middleware/auth.js';
 import { query, withTransaction } from '../../db/index.js';
+import { syncSessionBill, settleSessionIfPaid } from '../billing/billing.utils.js';
 
 export const kitchenRouter = Router();
 
@@ -53,14 +54,17 @@ kitchenRouter.get('/tickets', resolveTenant, requireStaff(['kitchen', 'manager',
           oi.name_snapshot,
           oi.variant_name_snapshot,
           oi.quantity,
+          mi.image_url,
+          mi.dietary_type,
           COALESCE(
             json_agg(json_build_object('name', oim.name_snapshot)) 
             FILTER (WHERE oim.id IS NOT NULL), '[]'
           ) as modifiers
          FROM order_items oi
          LEFT JOIN order_item_modifiers oim ON oim.order_item_id = oi.id
+         LEFT JOIN menu_items mi ON mi.id = oi.menu_item_id
          WHERE oi.order_id = ANY($1)
-         GROUP BY oi.id`,
+         GROUP BY oi.id, mi.id`,
         [orderIds]
       );
 
@@ -165,6 +169,14 @@ kitchenRouter.delete('/tickets/:id', resolveTenant, requireStaff(['kitchen', 'ma
          WHERE id = $2 AND restaurant_id = $3`,
         [`[VOID] ${reason}`, ticket.order_id, restaurant.id]
       );
+
+      // The cancelled dish must leave the table's bill
+      const ord = await client.query(`SELECT table_session_id FROM orders WHERE id = $1`, [ticket.order_id]);
+      const sid = ord.rows[0]?.table_session_id;
+      if (sid) {
+        await syncSessionBill(client, restaurant.id, sid);
+        await settleSessionIfPaid(client, restaurant.id, sid);
+      }
 
       return ticket;
     });

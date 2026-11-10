@@ -4,85 +4,59 @@ import { z } from 'zod';
 import { resolveTenant } from '../../middleware/tenant.js';
 import { requireStaff } from '../../middleware/auth.js';
 import { query, withTransaction } from '../../db/index.js';
+import {
+  computeBillAmounts,
+  getSessionBill,
+  getSessionLedger,
+  createSessionBill,
+  syncSessionBill,
+  getPaidTotal,
+  applyPayment
+} from './billing.utils.js';
 
 export const billingRouter = Router();
 
+const ratesFrom = (settings: any) => ({
+  taxPercent: Number(settings?.tax_rate_percent ?? 5),
+  servicePercent: Number(settings?.service_charge_percent ?? 0)
+});
+
 // ==========================================
-// 1. Generate or Get Running Bill for Active Table Session
+// 1. Running Bill of a Table Session (customer + waiter use the SAME numbers)
+//    total_paise  = whole bill, paid_paise = already paid, unpaid_paise = still owed
 // ==========================================
 billingRouter.get('/session/:sessionId', resolveTenant, async (req: Request, res: Response) => {
-  const { sessionId } = req.params;
+  const sessionId = req.params.sessionId as string;
   const restaurant = req.restaurant!;
-  const settings = req.restaurantSettings!;
+  const rates = ratesFrom(req.restaurantSettings);
 
   try {
-    // 1. Fetch eligible orders for this table session
-    const ordersRes = await query(
-      `SELECT * FROM orders 
-       WHERE table_session_id = $1 AND restaurant_id = $2 AND status NOT IN ('cancelled', 'rejected')
-       ORDER BY created_at ASC`,
-      [sessionId, restaurant.id]
-    );
+    const ledger = await getSessionLedger({ query }, restaurant.id, sessionId, rates);
 
-    if (ordersRes.rows.length === 0) {
+    if (ledger.orders.length === 0) {
       res.status(404).json({ error: 'NO_ORDERS', message: 'No active orders found for this session.' });
       return;
     }
 
-    // 2. Fetch all line items
-    const orderIds = ordersRes.rows.map((o) => o.id);
-    const itemsRes = await query(
-      `SELECT * FROM order_items WHERE order_id = ANY($1) ORDER BY id ASC`,
-      [orderIds]
-    );
-
-    // 3. Compute accurate integer paise arithmetic
-    let subtotalPaise = 0;
-    for (const item of itemsRes.rows) {
-      subtotalPaise += item.total_price_paise;
-    }
-
-    const taxPercent = Number(settings.tax_rate_percent || 5);
-    const servicePercent = Number(settings.service_charge_percent || 0);
-
-    const taxPaise = Math.round(subtotalPaise * (taxPercent / 100));
-    const serviceChargePaise = Math.round(subtotalPaise * (servicePercent / 100));
-    const discountPaise = 0;
-    const packagingChargePaise = 0;
-
-    const unroundedGrandTotal = subtotalPaise - discountPaise + taxPaise + serviceChargePaise + packagingChargePaise;
-    // Round off to nearest whole rupee (100 paise)
-    const remainder = unroundedGrandTotal % 100;
-    let roundOffPaise = 0;
-    if (remainder >= 50) {
-      roundOffPaise = 100 - remainder;
-    } else if (remainder > 0) {
-      roundOffPaise = -remainder;
-    }
-
-    const grandTotalPaise = unroundedGrandTotal + roundOffPaise;
-
-    // Check if bill record already generated for this session
-    const existingBill = await query(
-      `SELECT * FROM bills WHERE table_session_id = $1 AND restaurant_id = $2 ORDER BY created_at DESC LIMIT 1`,
-      [sessionId, restaurant.id]
-    );
-
     res.json({
-      bill: existingBill.rows[0] || null,
+      bill: ledger.bill,
       summary: {
         session_id: sessionId,
-        orders: ordersRes.rows,
-        items: itemsRes.rows,
-        subtotal_paise: subtotalPaise,
-        tax_rate_percent: taxPercent,
-        tax_paise: taxPaise,
-        service_charge_percent: servicePercent,
-        service_charge_paise: serviceChargePaise,
-        discount_paise: discountPaise,
-        packaging_charge_paise: packagingChargePaise,
-        round_off_paise: roundOffPaise,
-        grand_total_paise: grandTotalPaise
+        orders: ledger.orders,
+        items: ledger.items,
+        subtotal_paise: ledger.amounts.subtotal_paise,
+        tax_rate_percent: rates.taxPercent,
+        tax_paise: ledger.amounts.tax_paise,
+        service_charge_percent: rates.servicePercent,
+        service_charge_paise: ledger.amounts.service_charge_paise,
+        discount_paise: ledger.amounts.discount_paise,
+        packaging_charge_paise: ledger.amounts.packaging_charge_paise,
+        round_off_paise: ledger.amounts.round_off_paise,
+        grand_total_paise: ledger.amounts.grand_total_paise,
+        total_paise: ledger.total_paise,
+        paid_paise: ledger.paid_paise,
+        unpaid_paise: ledger.unpaid_paise,
+        is_fully_paid: ledger.is_fully_paid
       }
     });
   } catch (err: any) {
@@ -92,10 +66,12 @@ billingRouter.get('/session/:sessionId', resolveTenant, async (req: Request, res
 });
 
 // ==========================================
-// 2. Waiter or Manager Generates Final Bill
+// 2. Waiter or Manager Generates / Opens the Bill
+//    A table session keeps ONE bill. It is re-used (and re-synced with the orders)
+//    whether it is unpaid, partly paid or fully paid, so no duplicate bills appear.
 // ==========================================
 billingRouter.post('/generate', resolveTenant, requireStaff(['waiter', 'manager']), async (req: Request, res: Response) => {
-  const { table_session_id, order_id, discount_paise = 0 } = req.body;
+  const { table_session_id, order_id } = req.body;
   const restaurant = req.restaurant!;
   const settings = req.restaurantSettings!;
 
@@ -105,91 +81,71 @@ billingRouter.post('/generate', resolveTenant, requireStaff(['waiter', 'manager'
   }
 
   try {
-    const createdBill = await withTransaction(async (client) => {
-      let subtotalPaise = 0;
-      let packagingChargePaise = 0;
-
+    const result = await withTransaction(async (client) => {
       if (table_session_id) {
-        const itemsRes = await client.query(
-          `SELECT oi.total_price_paise 
-           FROM order_items oi
-           JOIN orders o ON o.id = oi.order_id
-           WHERE o.table_session_id = $1 AND o.status NOT IN ('cancelled', 'rejected')`,
+        const requestedDiscount = typeof req.body.discount_paise === 'number' ? req.body.discount_paise : undefined;
+        let bill: any = await getSessionBill(client, restaurant.id, table_session_id, true);
+        let rawToken: string | null = null;
+
+        if (bill) {
+          bill = await syncSessionBill(client, restaurant.id, table_session_id, { discountPaise: requestedDiscount });
+        } else {
+          bill = await createSessionBill(client, restaurant.id, table_session_id, requestedDiscount ?? 0);
+          rawToken = bill.raw_receipt_token;
+        }
+
+        await client.query(
+          `UPDATE table_sessions SET status = 'bill_generated' WHERE id = $1 AND status NOT IN ('closed', 'bill_generated')`,
           [table_session_id]
         );
-        for (const item of itemsRes.rows) {
-          subtotalPaise += item.total_price_paise;
-        }
-      } else {
-        const orderRes = await client.query(`SELECT * FROM orders WHERE id = $1`, [order_id]);
-        if (orderRes.rows.length === 0) throw new Error('Order not found.');
-        subtotalPaise = orderRes.rows[0].subtotal_paise;
-        if (orderRes.rows[0].order_type === 'takeaway') {
-          packagingChargePaise = settings.packaging_charge_paise || 0;
-        }
+
+        const paid = await getPaidTotal(client, bill.id);
+        const { raw_receipt_token: _o, ...clean } = bill;
+        return {
+          bill: { ...clean, raw_receipt_token: rawToken },
+          paid_paise: paid,
+          unpaid_paise: Math.max(0, bill.grand_total_paise - paid)
+        };
       }
 
-      if (subtotalPaise === 0) {
-        throw new Error('Cannot generate bill for 0 items.');
-      }
-
-      const taxPercent = Number(settings.tax_rate_percent || 5);
-      const servicePercent = Number(settings.service_charge_percent || 0);
-
-      const taxPaise = Math.round(subtotalPaise * (taxPercent / 100));
-      const serviceChargePaise = Math.round(subtotalPaise * (servicePercent / 100));
-      const unroundedGrandTotal = subtotalPaise - discount_paise + taxPaise + serviceChargePaise + packagingChargePaise;
-      
-      const remainder = unroundedGrandTotal % 100;
-      let roundOffPaise = 0;
-      if (remainder >= 50) roundOffPaise = 100 - remainder;
-      else if (remainder > 0) roundOffPaise = -remainder;
-
-      const grandTotalPaise = unroundedGrandTotal + roundOffPaise;
-
-      // Sequential Bill Number
-      const countRes = await client.query(
-        `SELECT COUNT(*) FROM bills WHERE restaurant_id = $1`,
-        [restaurant.id]
+      // ---- single order bill (takeaway / unbound order) ----
+      const existing = await client.query(
+        `SELECT * FROM bills WHERE restaurant_id = $1 AND order_id = $2 AND status != 'voided' ORDER BY created_at DESC LIMIT 1`,
+        [restaurant.id, order_id]
       );
+      if (existing.rows.length > 0) {
+        const b = existing.rows[0];
+        const paid = await getPaidTotal(client, b.id);
+        return { bill: { ...b, raw_receipt_token: null }, paid_paise: paid, unpaid_paise: Math.max(0, b.grand_total_paise - paid) };
+      }
+
+      const orderRes = await client.query(`SELECT * FROM orders WHERE id = $1 AND restaurant_id = $2`, [order_id, restaurant.id]);
+      if (orderRes.rows.length === 0) throw new Error('Order not found.');
+      const subtotalPaise = orderRes.rows[0].subtotal_paise;
+      if (subtotalPaise === 0) throw new Error('Cannot generate bill for 0 items.');
+      const packaging = orderRes.rows[0].order_type === 'takeaway' ? settings.packaging_charge_paise || 0 : 0;
+      const discount = typeof req.body.discount_paise === 'number' ? req.body.discount_paise : 0;
+      const a = computeBillAmounts({
+        subtotalPaise, discountPaise: discount, packagingPaise: packaging, ...ratesFrom(settings)
+      });
+
+      const countRes = await client.query(`SELECT COUNT(*) FROM bills WHERE restaurant_id = $1`, [restaurant.id]);
       const billNumber = `INV-${new Date().getFullYear()}-${1000 + parseInt(countRes.rows[0].count, 10) + 1}`;
+      const rawToken = crypto.randomBytes(24).toString('hex');
+      const hash = crypto.createHash('sha256').update(rawToken).digest('hex');
 
-      const rawReceiptToken = crypto.randomBytes(24).toString('hex');
-      const receiptHash = crypto.createHash('sha256').update(rawReceiptToken).digest('hex');
-
-      const billRes = await client.query(
-        `INSERT INTO bills 
-          (restaurant_id, bill_number, table_session_id, order_id, subtotal_paise, discount_paise, tax_paise, service_charge_paise, packaging_charge_paise, round_off_paise, grand_total_paise, status, receipt_token_hash)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'unpaid', $12)
-         RETURNING *`,
-        [
-          restaurant.id,
-          billNumber,
-          table_session_id || null,
-          order_id || null,
-          subtotalPaise,
-          discount_paise,
-          taxPaise,
-          serviceChargePaise,
-          packagingChargePaise,
-          roundOffPaise,
-          grandTotalPaise,
-          receiptHash
-        ]
+      const ins = await client.query(
+        `INSERT INTO bills
+          (restaurant_id, bill_number, table_session_id, order_id, subtotal_paise, discount_paise, tax_paise,
+           service_charge_paise, packaging_charge_paise, round_off_paise, grand_total_paise, status, receipt_token_hash)
+         VALUES ($1, $2, NULL, $3, $4, $5, $6, $7, $8, $9, $10, 'unpaid', $11) RETURNING *`,
+        [restaurant.id, billNumber, order_id, a.subtotal_paise, a.discount_paise, a.tax_paise,
+         a.service_charge_paise, a.packaging_charge_paise, a.round_off_paise, a.grand_total_paise, hash]
       );
-
-      // Update table session status
-      if (table_session_id) {
-        await client.query(`UPDATE table_sessions SET status = 'bill_generated' WHERE id = $1`, [table_session_id]);
-      }
-
-      return {
-        ...billRes.rows[0],
-        raw_receipt_token: rawReceiptToken
-      };
+      return { bill: { ...ins.rows[0], raw_receipt_token: rawToken }, paid_paise: 0, unpaid_paise: a.grand_total_paise };
     });
 
-    res.status(201).json({ bill: createdBill });
+    res.status(201).json(result);
   } catch (err: any) {
     console.error('Generate bill error:', err);
     res.status(400).json({ error: 'BILL_FAILED', message: err.message || 'Failed to generate bill.' });
@@ -197,7 +153,7 @@ billingRouter.post('/generate', resolveTenant, requireStaff(['waiter', 'manager'
 });
 
 // ==========================================
-// 3. Record Payment & Accrue Loyalty Points
+// 3. Record Payment (waiter / manager). Pays at most the UNPAID balance.
 // ==========================================
 const recordPaymentSchema = z.object({
   bill_id: z.string().uuid(),
@@ -218,125 +174,25 @@ billingRouter.post('/payments', resolveTenant, requireStaff(['waiter', 'manager'
   const { bill_id, amount_paise, method, transaction_reference } = parsed.data;
 
   try {
-    const paymentResult = await withTransaction(async (client) => {
-      // 1. Check Bill
-      const billRes = await client.query('SELECT * FROM bills WHERE id = $1 AND restaurant_id = $2', [bill_id, restaurant.id]);
-      if (billRes.rows.length === 0) throw new Error('Bill not found.');
-      const bill = billRes.rows[0];
+    const r = await withTransaction((client) =>
+      applyPayment(client, restaurant.id, bill_id, {
+        amountPaise: amount_paise,
+        method,
+        staffId: req.staff?.userId || null,
+        reference: transaction_reference || null
+      })
+    );
 
-      // 2. Insert Payment Record
-      const payRes = await client.query(
-        `INSERT INTO payments (restaurant_id, bill_id, amount_paise, method, status, recorded_by_staff_id, transaction_reference)
-         VALUES ($1, $2, $3, $4, 'completed', $5, $6)
-         RETURNING *`,
-        [restaurant.id, bill.id, amount_paise, method, req.staff?.userId || null, transaction_reference || null]
-      );
-
-      // 3. Check Total Paid
-      const totalPaidRes = await client.query(
-        `SELECT COALESCE(SUM(amount_paise), 0) as total_paid FROM payments WHERE bill_id = $1 AND status = 'completed'`,
-        [bill.id]
-      );
-      const totalPaid = parseInt(totalPaidRes.rows[0].total_paid, 10);
-
-      // 4. If fully paid, mark bill settled
-      if (totalPaid >= bill.grand_total_paise) {
-        await client.query(`UPDATE bills SET status = 'paid', settled_at = now() WHERE id = $1`, [bill.id]);
-
-        // 1. Identify target table and session
-        let targetTableId: string | null = null;
-        const targetSessionId = bill.table_session_id;
-
-        if (targetSessionId) {
-          await client.query(
-            `UPDATE orders SET status = 'completed', updated_at = now() 
-             WHERE table_session_id = $1 AND status NOT IN ('cancelled', 'rejected')`,
-            [targetSessionId]
-          );
-          const sessionRes = await client.query(
-            `UPDATE table_sessions SET status = 'closed', closed_at = now() WHERE id = $1 RETURNING table_id`,
-            [targetSessionId]
-          );
-          if (sessionRes.rows.length > 0) {
-            targetTableId = sessionRes.rows[0].table_id;
-          }
-        }
-
-        if (bill.order_id) {
-          await client.query(
-            `UPDATE orders SET status = 'completed', updated_at = now() 
-             WHERE id = $1 AND status NOT IN ('cancelled', 'rejected')`,
-            [bill.order_id]
-          );
-          if (!targetTableId) {
-            const ordRes = await client.query('SELECT table_id, table_session_id FROM orders WHERE id = $1', [bill.order_id]);
-            if (ordRes.rows.length > 0) {
-              targetTableId = ordRes.rows[0].table_id;
-              if (ordRes.rows[0].table_session_id) {
-                await client.query(
-                  `UPDATE table_sessions SET status = 'closed', closed_at = now() WHERE id = $1`,
-                  [ordRes.rows[0].table_session_id]
-                );
-              }
-            }
-          }
-        }
-
-        // Table gets completely empty & unoccupied
-        if (targetTableId) {
-          await client.query(
-            `UPDATE table_sessions SET status = 'closed', closed_at = COALESCE(closed_at, now()) 
-             WHERE table_id = $1 AND status != 'closed'`,
-            [targetTableId]
-          );
-          await client.query(
-            `UPDATE dining_tables SET status = 'available' WHERE id = $1`,
-            [targetTableId]
-          );
-        }
-
-        // Accrue Loyalty Points: 1 point per ₹1 eligible spend (net item subtotal after discount)
-        const eligibleSpendPaise = Math.max(0, bill.subtotal_paise - bill.discount_paise);
-        const pointsEarned = Math.floor(eligibleSpendPaise / 100);
-
-        if (pointsEarned > 0) {
-          // Find customer from order
-          const customerRes = await client.query(
-            `SELECT customer_id FROM orders 
-             WHERE (table_session_id = $1 OR id = $2) AND customer_id IS NOT NULL 
-             LIMIT 1`,
-            [bill.table_session_id, bill.order_id]
-          );
-
-          if (customerRes.rows.length > 0) {
-            const customerId = customerRes.rows[0].customer_id;
-
-            // Get previous balance
-            const balRes = await client.query(
-              `SELECT balance_after FROM loyalty_ledger WHERE restaurant_id = $1 AND customer_id = $2 ORDER BY created_at DESC LIMIT 1`,
-              [restaurant.id, customerId]
-            );
-            const prevBalance = balRes.rows.length > 0 ? balRes.rows[0].balance_after : 0;
-            const newBalance = prevBalance + pointsEarned;
-
-            await client.query(
-              `INSERT INTO loyalty_ledger (restaurant_id, customer_id, points_delta, entry_type, source_bill_id, eligible_spend_paise, balance_after)
-               VALUES ($1, $2, $3, 'earn', $4, $5, $6)`,
-              [restaurant.id, customerId, pointsEarned, bill.id, eligibleSpendPaise, newBalance]
-            );
-          }
-        }
-      }
-
-      return {
-        payment: payRes.rows[0],
-        total_paid: totalPaid,
-        remaining_balance: Math.max(0, bill.grand_total_paise - totalPaid),
-        is_fully_paid: totalPaid >= bill.grand_total_paise
-      };
+    res.status(201).json({
+      payment: r.payment,
+      total_paid: r.paid_paise,
+      paid_paise: r.paid_paise,
+      total_paise: r.total_paise,
+      unpaid_paise: r.unpaid_paise,
+      remaining_balance: r.unpaid_paise,
+      is_fully_paid: r.is_fully_paid,
+      session_closed: r.session_closed
     });
-
-    res.status(201).json(paymentResult);
   } catch (err: any) {
     console.error('Payment recording error:', err);
     res.status(400).json({ error: 'PAYMENT_FAILED', message: err.message || 'Failed to record payment.' });
@@ -344,7 +200,7 @@ billingRouter.post('/payments', resolveTenant, requireStaff(['waiter', 'manager'
 });
 
 // ==========================================
-// 3b. Customer Online Payment (Exclusively sets bill & order to Paid)
+// 3b. Customer Online Payment — pays the table's UNPAID balance only
 // ==========================================
 billingRouter.post('/customer/pay', resolveTenant, async (req: Request, res: Response) => {
   const { order_id, table_session_id, method = 'online_gateway' } = req.body;
@@ -358,164 +214,68 @@ billingRouter.post('/customer/pay', resolveTenant, async (req: Request, res: Res
 
   try {
     const result = await withTransaction(async (client) => {
-      // 1. Check if bill already generated for this specific order or an unpaid bill for this session
-      let billRes;
+      // Dine-in orders always settle through the table's single session bill
+      let sessionId: string | null = table_session_id || null;
+      let orderRow: any = null;
       if (order_id) {
-        billRes = await client.query(
-          `SELECT * FROM bills 
-           WHERE restaurant_id = $1 AND order_id = $2
-           ORDER BY created_at DESC LIMIT 1`,
+        const o = await client.query(`SELECT * FROM orders WHERE id = $1 AND restaurant_id = $2`, [order_id, restaurant.id]);
+        if (o.rows.length === 0) throw new Error('Order not found.');
+        orderRow = o.rows[0];
+        if (orderRow.table_session_id) sessionId = orderRow.table_session_id;
+      }
+
+      let bill: any = null;
+      if (sessionId) {
+        bill = await getSessionBill(client, restaurant.id, sessionId, true);
+        if (bill) bill = await syncSessionBill(client, restaurant.id, sessionId);
+        else {
+          try {
+            bill = await createSessionBill(client, restaurant.id, sessionId);
+          } catch {
+            return { already_paid: true, is_fully_paid: true, message: 'Nothing to pay on this table.' };
+          }
+        }
+      } else {
+        const ex = await client.query(
+          `SELECT * FROM bills WHERE restaurant_id = $1 AND order_id = $2 AND status != 'voided' ORDER BY created_at DESC LIMIT 1`,
           [restaurant.id, order_id]
         );
-      } else {
-        billRes = await client.query(
-          `SELECT * FROM bills 
-           WHERE restaurant_id = $1 AND table_session_id = $2 AND status = 'unpaid'
-           ORDER BY created_at DESC LIMIT 1`,
-          [restaurant.id, table_session_id]
-        );
-      }
-
-      let bill = billRes.rows[0];
-
-      // If already paid, return settled status
-      if (bill && bill.status === 'paid') {
-        return {
-          already_paid: true,
-          bill,
-          receipt_token: bill.receipt_token_hash,
-          is_fully_paid: true,
-          message: 'Bill has already been settled and marked Paid.'
-        };
-      }
-
-      // If bill does not exist, compute and generate it
-      if (!bill) {
-        let subtotalPaise = 0;
-        let packagingChargePaise = 0;
-
-        if (order_id) {
-          const oRes = await client.query('SELECT * FROM orders WHERE id = $1', [order_id]);
-          if (oRes.rows.length === 0) throw new Error('Order not found.');
-          subtotalPaise = oRes.rows[0].subtotal_paise;
-          if (oRes.rows[0].order_type === 'takeaway') {
-            packagingChargePaise = settings.packaging_charge_paise || 0;
-          }
-        } else if (table_session_id) {
-          const itemsRes = await client.query(
-            `SELECT oi.total_price_paise 
-             FROM order_items oi
-             JOIN orders o ON o.id = oi.order_id
-             WHERE o.table_session_id = $1 AND o.status NOT IN ('cancelled', 'rejected', 'completed')`,
-            [table_session_id]
+        bill = ex.rows[0];
+        if (!bill) {
+          const packaging = orderRow.order_type === 'takeaway' ? settings.packaging_charge_paise || 0 : 0;
+          const a = computeBillAmounts({ subtotalPaise: orderRow.subtotal_paise, packagingPaise: packaging, ...ratesFrom(settings) });
+          const countRes = await client.query(`SELECT COUNT(*) FROM bills WHERE restaurant_id = $1`, [restaurant.id]);
+          const billNumber = `INV-${new Date().getFullYear()}-${1000 + parseInt(countRes.rows[0].count, 10) + 1}`;
+          const rawToken = crypto.randomBytes(24).toString('hex');
+          const hash = crypto.createHash('sha256').update(rawToken).digest('hex');
+          const ins = await client.query(
+            `INSERT INTO bills
+              (restaurant_id, bill_number, table_session_id, order_id, subtotal_paise, discount_paise, tax_paise,
+               service_charge_paise, packaging_charge_paise, round_off_paise, grand_total_paise, status, receipt_token_hash)
+             VALUES ($1, $2, NULL, $3, $4, 0, $5, $6, $7, $8, $9, 'unpaid', $10) RETURNING *`,
+            [restaurant.id, billNumber, order_id, a.subtotal_paise, a.tax_paise, a.service_charge_paise,
+             a.packaging_charge_paise, a.round_off_paise, a.grand_total_paise, hash]
           );
-          for (const item of itemsRes.rows) {
-            subtotalPaise += item.total_price_paise;
-          }
-        }
-
-        if (subtotalPaise === 0) {
-          return {
-            already_paid: true,
-            is_fully_paid: true,
-            message: 'All orders on this table have already been settled.'
-          };
-        }
-
-        const taxPercent = Number(settings.tax_rate_percent || 5);
-        const servicePercent = Number(settings.service_charge_percent || 0);
-
-        const taxPaise = Math.round(subtotalPaise * (taxPercent / 100));
-        const serviceChargePaise = Math.round(subtotalPaise * (servicePercent / 100));
-        const unrounded = subtotalPaise + taxPaise + serviceChargePaise + packagingChargePaise;
-        const remainder = unrounded % 100;
-        let roundOffPaise = 0;
-        if (remainder >= 50) roundOffPaise = 100 - remainder;
-        else if (remainder > 0) roundOffPaise = -remainder;
-        const grandTotalPaise = unrounded + roundOffPaise;
-
-        const countRes = await client.query(`SELECT COUNT(*) FROM bills WHERE restaurant_id = $1`, [restaurant.id]);
-        const billNumber = `INV-${new Date().getFullYear()}-${1000 + parseInt(countRes.rows[0].count, 10) + 1}`;
-        const rawReceiptToken = crypto.randomBytes(24).toString('hex');
-        const receiptHash = crypto.createHash('sha256').update(rawReceiptToken).digest('hex');
-
-        const newBill = await client.query(
-          `INSERT INTO bills 
-            (restaurant_id, bill_number, table_session_id, order_id, subtotal_paise, discount_paise, tax_paise, service_charge_paise, packaging_charge_paise, round_off_paise, grand_total_paise, status, receipt_token_hash)
-           VALUES ($1, $2, $3, $4, $5, 0, $6, $7, $8, $9, $10, 'unpaid', $11)
-           RETURNING *`,
-          [restaurant.id, billNumber, table_session_id || null, order_id || null, subtotalPaise, taxPaise, serviceChargePaise, packagingChargePaise, roundOffPaise, grandTotalPaise, receiptHash]
-        );
-        bill = newBill.rows[0];
-      }
-
-      // Check again if already paid
-      if (bill.status === 'paid') {
-        return {
-          already_paid: true,
-          bill,
-          receipt_token: bill.receipt_token_hash,
-          is_fully_paid: true,
-          message: 'Bill has already been settled and marked Paid.'
-        };
-      }
-
-      // Record Customer Online Payment
-      await client.query(
-        `INSERT INTO payments (restaurant_id, bill_id, amount_paise, method, status, transaction_reference)
-         VALUES ($1, $2, $3, $4, 'completed', $5)`,
-        [restaurant.id, bill.id, bill.grand_total_paise, method, 'ONLINE_' + Date.now()]
-      );
-
-      // Mark Bill Settled & Paid
-      await client.query(`UPDATE bills SET status = 'paid', settled_at = now() WHERE id = $1`, [bill.id]);
-
-      // Complete orders and ensure table gets empty & unoccupied when all orders done
-      let targetTableId: string | null = null;
-      if (order_id) {
-        await client.query(
-          `UPDATE orders SET status = 'completed', updated_at = now() 
-           WHERE id = $1 AND status NOT IN ('cancelled', 'rejected')`,
-          [order_id]
-        );
-        const oCheck = await client.query('SELECT table_id, table_session_id FROM orders WHERE id = $1', [order_id]);
-        if (oCheck.rows.length > 0) {
-          targetTableId = oCheck.rows[0].table_id;
-          const targetSessionId = oCheck.rows[0].table_session_id;
-          if (targetSessionId) {
-            const activeRes = await client.query(
-              `SELECT COUNT(*) FROM orders WHERE table_session_id = $1 AND status NOT IN ('cancelled', 'rejected', 'completed')`,
-              [targetSessionId]
-            );
-            if (parseInt(activeRes.rows[0].count, 10) === 0) {
-              await client.query(`UPDATE table_sessions SET status = 'closed', closed_at = now() WHERE id = $1`, [targetSessionId]);
-              if (targetTableId) {
-                await client.query(`UPDATE dining_tables SET status = 'available' WHERE id = $1`, [targetTableId]);
-              }
-            }
-          }
-        }
-      } else if (table_session_id) {
-        await client.query(
-          `UPDATE orders SET status = 'completed', updated_at = now() 
-           WHERE table_session_id = $1 AND status NOT IN ('cancelled', 'rejected')`,
-          [table_session_id]
-        );
-        const sRes = await client.query(
-          `UPDATE table_sessions SET status = 'closed', closed_at = now() WHERE id = $1 RETURNING table_id`,
-          [table_session_id]
-        );
-        if (sRes.rows.length > 0) {
-          targetTableId = sRes.rows[0].table_id;
-          await client.query(`UPDATE dining_tables SET status = 'available' WHERE id = $1`, [targetTableId]);
+          bill = ins.rows[0];
         }
       }
+
+      const r = await applyPayment(client, restaurant.id, bill.id, {
+        amountPaise: null, // exactly the unpaid balance
+        method,
+        reference: 'ONLINE_' + Date.now()
+      });
 
       return {
-        already_paid: false,
-        bill,
-        is_fully_paid: true,
-        receipt_token: bill.receipt_token_hash
+        already_paid: r.already_paid,
+        bill: r.bill,
+        receipt_token: r.bill.receipt_token_hash,
+        is_fully_paid: r.is_fully_paid,
+        total_paise: r.total_paise,
+        paid_paise: r.paid_paise,
+        unpaid_paise: r.unpaid_paise,
+        session_closed: r.session_closed,
+        message: r.already_paid ? 'Nothing is unpaid on this bill.' : undefined
       };
     });
 
@@ -580,6 +340,10 @@ billingRouter.get('/public/receipt/:receiptToken', resolveTenant, async (req: Re
       [bill.id]
     );
 
+    const paidPaise = paymentsRes.rows
+      .filter((p: any) => p.status === 'completed')
+      .reduce((n: number, p: any) => n + p.amount_paise, 0);
+
     res.json({
       restaurant: {
         name: restaurant.name,
@@ -589,7 +353,10 @@ billingRouter.get('/public/receipt/:receiptToken', resolveTenant, async (req: Re
       },
       bill,
       items: itemsRes.rows,
-      payments: paymentsRes.rows
+      payments: paymentsRes.rows,
+      total_paise: bill.grand_total_paise,
+      paid_paise: paidPaise,
+      unpaid_paise: Math.max(0, bill.grand_total_paise - paidPaise)
     });
   } catch (err: any) {
     console.error('Fetch receipt error:', err);

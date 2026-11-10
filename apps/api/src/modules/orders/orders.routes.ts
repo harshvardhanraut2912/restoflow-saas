@@ -4,6 +4,14 @@ import { z } from 'zod';
 import { resolveTenant } from '../../middleware/tenant.js';
 import { requireStaff } from '../../middleware/auth.js';
 import { query, withTransaction } from '../../db/index.js';
+import {
+  WALKIN_PHONE_E164,
+  WALKIN_CUSTOMER_NAME,
+  SETTLED_SESSION_REUSE_MINUTES,
+  syncSessionBill,
+  getSessionLedger,
+  settleSessionIfPaid
+} from '../billing/billing.utils.js';
 
 export const ordersRouter = Router();
 
@@ -24,6 +32,21 @@ const placeOrderSchema = z.object({
   notes: z.string().max(300).optional().nullable(),
   items: z.array(orderItemSchema).min(1)
 });
+
+// Waiter POS: identical payload, but the guest's phone/name are optional
+// (the waiter may not ask for them; the guest is already sitting at the table).
+const waiterOrderSchema = z.object({
+  order_type: z.enum(['dine_in', 'takeaway']).default('dine_in'),
+  table_id: z.string().uuid().optional().nullable(),
+  table_session_id: z.string().uuid().optional().nullable(),
+  phone: z.string().max(20).optional().nullable(),
+  customer_name: z.string().max(80).optional().nullable(),
+  notes: z.string().max(300).optional().nullable(),
+  items: z.array(orderItemSchema).min(1)
+});
+
+// Session statuses that still count as "the table is being served"
+const LIVE_SESSION_STATUSES = ['open', 'bill_requested', 'bill_generated'];
 
 // Helper: Normalize phone to E.164
 function normalizePhone(raw: string, defaultCountry = '+91'): string {
@@ -46,7 +69,7 @@ export async function createOrderService(params: {
   orderType: 'dine_in' | 'takeaway';
   tableId?: string | null;
   tableSessionId?: string | null;
-  phoneRaw: string;
+  phoneRaw?: string | null;
   customerName?: string | null;
   notes?: string | null;
   items: z.infer<typeof orderItemSchema>[];
@@ -64,28 +87,76 @@ export async function createOrderService(params: {
     staffUserId
   } = params;
 
-  const phoneE164 = normalizePhone(phoneRaw);
-
   return await withTransaction(async (client) => {
-    // 0. If dine-in, ensure table session is active and dining table is marked occupied immediately
-    let resolvedSessionId = tableSessionId;
+    // 0. Dine-in: bind to the table's live session (validate the hinted one, else
+    //    reuse the active one, else open a fresh one) and mark the table occupied.
+    let resolvedSessionId: string | null = null;
     if (orderType === 'dine_in' && tableId) {
-      if (!resolvedSessionId) {
-        let activeSession = await client.query(
-          `SELECT id FROM table_sessions 
-           WHERE restaurant_id = $1 AND table_id = $2 AND status != 'closed'
-           ORDER BY opened_at DESC LIMIT 1`,
-          [restaurantId, tableId]
+      // 0a. A hinted session is only trusted if it belongs to this table and is still live
+      if (tableSessionId) {
+        const hinted = await client.query(
+          `SELECT id FROM table_sessions
+           WHERE id = $1 AND restaurant_id = $2 AND table_id = $3 AND status = ANY($4)`,
+          [tableSessionId, restaurantId, tableId, LIVE_SESSION_STATUSES]
         );
-        if (activeSession.rows.length === 0) {
-          activeSession = await client.query(
+        if (hinted.rows.length > 0) resolvedSessionId = hinted.rows[0].id;
+
+        // The guest paid (session auto-closed) and now orders more from the same phone:
+        // re-open that session so it continues on the SAME bill (total grows, paid stays,
+        // only the new dish is unpaid). Only if the table has no other live session.
+        if (!resolvedSessionId) {
+          const recent = await client.query(
+            `SELECT ts.id FROM table_sessions ts
+             WHERE ts.id = $1 AND ts.restaurant_id = $2 AND ts.table_id = $3 AND ts.status = 'closed'
+               AND ts.closed_at > now() - ($4 || ' minutes')::interval
+               AND EXISTS (SELECT 1 FROM bills b WHERE b.table_session_id = ts.id AND b.order_id IS NULL AND b.status = 'paid')
+               AND NOT EXISTS (SELECT 1 FROM table_sessions o WHERE o.table_id = ts.table_id AND o.status != 'closed')`,
+            [tableSessionId, restaurantId, tableId, String(SETTLED_SESSION_REUSE_MINUTES)]
+          );
+          if (recent.rows.length > 0) {
+            await client.query(
+              `UPDATE table_sessions SET status = 'open', closed_at = NULL WHERE id = $1`,
+              [recent.rows[0].id]
+            );
+            resolvedSessionId = recent.rows[0].id;
+          }
+        }
+      }
+
+      // 0b. Otherwise the table's active session, or open a new one
+      if (!resolvedSessionId) {
+        let active = await client.query(
+          `SELECT id FROM table_sessions
+           WHERE restaurant_id = $1 AND table_id = $2 AND status = ANY($3)
+           ORDER BY opened_at DESC LIMIT 1`,
+          [restaurantId, tableId, LIVE_SESSION_STATUSES]
+        );
+
+        if (active.rows.length === 0) {
+          // Retire leftovers (e.g. 'settled') so the one-active-session-per-table index never blocks us
+          await client.query(
+            `UPDATE table_sessions SET status = 'closed', closed_at = COALESCE(closed_at, now())
+             WHERE restaurant_id = $1 AND table_id = $2 AND status != 'closed'`,
+            [restaurantId, tableId]
+          );
+          active = await client.query(
             `INSERT INTO table_sessions (restaurant_id, table_id, status)
              VALUES ($1, $2, 'open')
+             ON CONFLICT (restaurant_id, table_id) WHERE status != 'closed' DO NOTHING
              RETURNING id`,
             [restaurantId, tableId]
           );
+          if (active.rows.length === 0) {
+            // Lost a race with a concurrent request: use the session it created
+            active = await client.query(
+              `SELECT id FROM table_sessions
+               WHERE restaurant_id = $1 AND table_id = $2 AND status = ANY($3)
+               ORDER BY opened_at DESC LIMIT 1`,
+              [restaurantId, tableId, LIVE_SESSION_STATUSES]
+            );
+          }
         }
-        resolvedSessionId = activeSession.rows[0].id;
+        resolvedSessionId = active.rows[0].id;
       }
 
       // Mark table occupied unconditionally
@@ -96,24 +167,60 @@ export async function createOrderService(params: {
     }
 
     // 1. Resolve or Upsert Customer Profile
-    let customerRes = await client.query(
-      `SELECT * FROM customers WHERE restaurant_id = $1 AND phone_e164 = $2`,
-      [restaurantId, phoneE164]
-    );
-
+    let phoneE164: string;
     let customerId: string;
-    if (customerRes.rows.length === 0) {
-      const newCust = await client.query(
-        `INSERT INTO customers (restaurant_id, phone_e164, name)
-         VALUES ($1, $2, $3)
-         RETURNING id`,
-        [restaurantId, phoneE164, customerName || null]
+    const phoneDigits = (phoneRaw || '').replace(/\D/g, '');
+
+    if (phoneDigits.length >= 8) {
+      phoneE164 = normalizePhone(phoneRaw as string);
+      const customerRes = await client.query(
+        `SELECT * FROM customers WHERE restaurant_id = $1 AND phone_e164 = $2`,
+        [restaurantId, phoneE164]
       );
-      customerId = newCust.rows[0].id;
+
+      if (customerRes.rows.length === 0) {
+        const newCust = await client.query(
+          `INSERT INTO customers (restaurant_id, phone_e164, name)
+           VALUES ($1, $2, $3)
+           RETURNING id`,
+          [restaurantId, phoneE164, customerName || null]
+        );
+        customerId = newCust.rows[0].id;
+      } else {
+        customerId = customerRes.rows[0].id;
+        if (customerName && !customerRes.rows[0].name) {
+          await client.query(`UPDATE customers SET name = $1 WHERE id = $2`, [customerName, customerId]);
+        }
+      }
     } else {
-      customerId = customerRes.rows[0].id;
-      if (customerName && !customerRes.rows[0].name) {
-        await client.query(`UPDATE customers SET name = $1 WHERE id = $2`, [customerName, customerId]);
+      // No phone given (waiter flow): attach to the guest already known on this table session,
+      // so loyalty/receipts follow the real customer; otherwise fall back to the walk-in guest.
+      let known: { customer_id: string; customer_phone_snapshot: string } | null = null;
+      if (resolvedSessionId) {
+        const prev = await client.query(
+          `SELECT o.customer_id, o.customer_phone_snapshot
+           FROM orders o
+           JOIN customers c ON c.id = o.customer_id
+           WHERE o.table_session_id = $1 AND o.restaurant_id = $2 AND c.phone_e164 <> $3
+           ORDER BY o.created_at ASC LIMIT 1`,
+          [resolvedSessionId, restaurantId, WALKIN_PHONE_E164]
+        );
+        if (prev.rows.length > 0) known = prev.rows[0];
+      }
+
+      if (known) {
+        customerId = known.customer_id;
+        phoneE164 = known.customer_phone_snapshot;
+      } else {
+        phoneE164 = WALKIN_PHONE_E164;
+        const walkIn = await client.query(
+          `INSERT INTO customers (restaurant_id, phone_e164, name)
+           VALUES ($1, $2, $3)
+           ON CONFLICT (restaurant_id, phone_e164) DO UPDATE SET phone_e164 = EXCLUDED.phone_e164
+           RETURNING id`,
+          [restaurantId, phoneE164, WALKIN_CUSTOMER_NAME]
+        );
+        customerId = walkIn.rows[0].id;
       }
     }
 
@@ -261,11 +368,21 @@ export async function createOrderService(params: {
       [restaurantId, newOrder.id, `K-${orderNumber.replace('#', '')}`]
     );
 
+    // 8. Keep the table's single bill in step with the new order:
+    //    unpaid bill -> new dish is added to the unpaid amount;
+    //    paid bill   -> total grows, paid stays, only the new dish is unpaid.
+    let updatedBill: any = null;
+    if (orderType === 'dine_in' && resolvedSessionId) {
+      updatedBill = await syncSessionBill(client, restaurantId, resolvedSessionId);
+    }
+
     return {
       order: newOrder,
       items: preparedItems,
       ticket: ticketRes.rows[0],
-      raw_access_token: rawAccessToken
+      raw_access_token: rawAccessToken,
+      table_session_id: orderType === 'dine_in' ? resolvedSessionId : null,
+      updated_bill: updatedBill
     };
   });
 }
@@ -282,49 +399,10 @@ ordersRouter.post('/customer/checkout', resolveTenant, async (req: Request, res:
 
   const { order_type, table_id, table_session_id, phone, customer_name, notes, items } = parsed.data;
 
-  let resolvedSessionId = table_session_id;
-
-  // Validate dine-in requires table; resolve or create active table session on server side
-  if (order_type === 'dine_in') {
-    if (!table_id) {
-      res.status(400).json({ error: 'TABLE_REQUIRED', message: 'Dine-in orders require a table to be selected.' });
-      return;
-    }
-
-    if (!resolvedSessionId) {
-      try {
-        const sessionRes = await withTransaction(async (client) => {
-          let active = await client.query(
-            `SELECT id FROM table_sessions 
-             WHERE restaurant_id = $1 AND table_id = $2 AND status IN ('open', 'bill_requested', 'bill_generated')
-             ORDER BY opened_at DESC LIMIT 1`,
-            [restaurant.id, table_id]
-          );
-
-          if (active.rows.length === 0) {
-            active = await client.query(
-              `INSERT INTO table_sessions (restaurant_id, table_id, status)
-               VALUES ($1, $2, 'open')
-               RETURNING id`,
-              [restaurant.id, table_id]
-            );
-
-            await client.query(
-              `UPDATE dining_tables SET status = 'occupied' WHERE id = $1`,
-              [table_id]
-            );
-          }
-
-          return active.rows[0];
-        });
-
-        resolvedSessionId = sessionRes.id;
-      } catch (sessErr: any) {
-        console.error('Auto table session creation error:', sessErr);
-        res.status(500).json({ error: 'SESSION_ERROR', message: 'Failed to bind table session.' });
-        return;
-      }
-    }
+  // Validate dine-in requires table; the order service resolves / opens the live table session
+  if (order_type === 'dine_in' && !table_id) {
+    res.status(400).json({ error: 'TABLE_REQUIRED', message: 'Dine-in orders require a table to be selected.' });
+    return;
   }
 
   try {
@@ -332,7 +410,7 @@ ordersRouter.post('/customer/checkout', resolveTenant, async (req: Request, res:
       restaurantId: restaurant.id,
       orderType: order_type,
       tableId: table_id,
-      tableSessionId: resolvedSessionId,
+      tableSessionId: table_session_id,
       phoneRaw: phone,
       customerName: customer_name,
       notes,
@@ -345,6 +423,7 @@ ordersRouter.post('/customer/checkout', resolveTenant, async (req: Request, res:
       order_type: result.order.order_type,
       status: result.order.status,
       subtotal_paise: result.order.subtotal_paise,
+      table_session_id: result.table_session_id,
       access_token: result.raw_access_token,
       tracking_url: `/u/customer/order/${result.order.id}?token=${result.raw_access_token}`
     });
@@ -354,10 +433,13 @@ ordersRouter.post('/customer/checkout', resolveTenant, async (req: Request, res:
   }
 });
 
-// Waiter Manual Order Placement Endpoint (uses the exact same domain service)
+// Waiter Manual Order Placement Endpoint
+// Uses the exact same domain service as the customer QR checkout: same order row, same
+// kitchen ticket, same table session (so it shows on the customer's dashboard) and the
+// amount is added to the table's existing unpaid bill.
 ordersRouter.post('/waiter/order', resolveTenant, requireStaff(['waiter', 'manager']), async (req: Request, res: Response) => {
   const restaurant = req.restaurant!;
-  const parsed = placeOrderSchema.safeParse(req.body);
+  const parsed = waiterOrderSchema.safeParse(req.body);
 
   if (!parsed.success) {
     res.status(400).json({ error: 'VALIDATION_ERROR', details: parsed.error.format() });
@@ -366,22 +448,39 @@ ordersRouter.post('/waiter/order', resolveTenant, requireStaff(['waiter', 'manag
 
   const { order_type, table_id, table_session_id, phone, customer_name, notes, items } = parsed.data;
 
+  if (order_type === 'dine_in' && !table_id) {
+    res.status(400).json({ error: 'TABLE_REQUIRED', message: 'Dine-in orders require a table to be selected.' });
+    return;
+  }
+
+  // Phone is optional for waiters, but if one is typed it must be a real number
+  const phoneDigits = (phone || '').replace(/\D/g, '');
+  if (phoneDigits.length > 0 && phoneDigits.length < 10) {
+    res.status(400).json({ error: 'INVALID_PHONE', message: 'Enter a valid 10-digit mobile number or leave it blank.' });
+    return;
+  }
+
   try {
     const result = await createOrderService({
       restaurantId: restaurant.id,
       orderType: order_type,
       tableId: table_id,
       tableSessionId: table_session_id,
-      phoneRaw: phone,
+      phoneRaw: phoneDigits.length >= 10 ? `+91${phoneDigits.slice(-10)}` : null,
       customerName: customer_name,
       notes,
       items,
       staffUserId: req.staff?.userId
     });
 
+    const { access_token_hash: _omit, ...safeOrder } = result.order;
+
     res.status(201).json({
-      order: result.order,
-      ticket: result.ticket
+      order: safeOrder,
+      ticket: result.ticket,
+      items: result.items,
+      table_session_id: result.table_session_id,
+      bill_updated: !!result.updated_bill
     });
   } catch (err: any) {
     console.error('Waiter order error:', err);
@@ -438,132 +537,92 @@ ordersRouter.get('/customer/:id', resolveTenant, async (req: Request, res: Respo
        FROM bills 
        WHERE restaurant_id = $1 AND (
          order_id = $2 
-         OR (table_session_id = $3 AND $3 IS NOT NULL AND (order_id IS NULL OR order_id = $2) AND created_at >= $4)
+         OR (table_session_id = $3 AND $3 IS NOT NULL AND order_id IS NULL)
        )
        ORDER BY created_at DESC LIMIT 1`,
-      [restaurant.id, order.id, order.table_session_id || null, order.created_at]
+      [restaurant.id, order.id, order.table_session_id || null]
     );
 
     const bill = billRes.rows[0] || null;
-    const isPaid = (bill?.status === 'paid') || (order.status === 'completed');
 
-    // Session order sequence & cumulative total calculation for multi-round dining
+    // Session money: ONE ledger shared with the running bill and the waiter panel
     let roundNumber = 1;
+    let sessionTotalPaise = 0;
+    let sessionPaidPaise = 0;
+    let sessionUnpaidPaise = 0;
     let sessionSubtotalPaise = order.subtotal_paise;
-    let sessionUnpaidPaise = isPaid ? 0 : order.subtotal_paise;
     let sessionOrders: any[] = [];
+    let sessionBill: any = bill;
 
     if (order.table_session_id) {
-      const sessionStatsRes = await query(
-        `SELECT 
-          COALESCE(SUM(subtotal_paise), 0) as session_subtotal_paise,
-          COUNT(id) as total_session_orders
-         FROM orders 
-         WHERE table_session_id = $1 AND restaurant_id = $2 AND status NOT IN ('cancelled', 'rejected')`,
-        [order.table_session_id, restaurant.id]
-      );
+      const st = req.restaurantSettings as any;
+      const ledger = await getSessionLedger({ query }, restaurant.id, order.table_session_id, {
+        taxPercent: Number(st?.tax_rate_percent ?? 5),
+        servicePercent: Number(st?.service_charge_percent ?? 0)
+      });
+      sessionBill = ledger.bill || bill;
+      sessionSubtotalPaise = ledger.amounts.subtotal_paise;
+      sessionTotalPaise = ledger.total_paise;
+      sessionPaidPaise = ledger.paid_paise;
+      sessionUnpaidPaise = ledger.unpaid_paise;
 
-      if (sessionStatsRes.rows.length > 0) {
-        sessionSubtotalPaise = parseInt(sessionStatsRes.rows[0].session_subtotal_paise, 10);
+      const itemsBy: Record<string, any[]> = {};
+      if (ledger.orders.length > 0) {
+        const det = await query(
+          `SELECT oi.id, oi.order_id, oi.name_snapshot, oi.quantity, oi.unit_price_paise, oi.total_price_paise,
+                  oi.variant_name_snapshot,
+                  COALESCE((SELECT json_agg(json_build_object('name', oim.name_snapshot, 'price_paise', oim.unit_price_paise))
+                            FROM order_item_modifiers oim WHERE oim.order_item_id = oi.id), '[]'::json) AS modifiers
+           FROM order_items oi WHERE oi.order_id = ANY($1) ORDER BY oi.id`,
+          [ledger.orders.map((o: any) => o.id)]
+        );
+        for (const r of det.rows) {
+          (itemsBy[r.order_id] = itemsBy[r.order_id] || []).push({
+            ...r,
+            name: r.name_snapshot,
+            variant_name: r.variant_name_snapshot
+          });
+        }
       }
 
-      const roundRes = await query(
-        `SELECT COUNT(*) + 1 as round_number
-         FROM orders 
-         WHERE table_session_id = $1 AND restaurant_id = $2 AND status NOT IN ('cancelled', 'rejected') AND created_at < $3`,
-        [order.table_session_id, restaurant.id, order.created_at]
-      );
+      sessionOrders = ledger.orders.map((o: any) => ({
+        id: o.id,
+        order_number: o.order_number,
+        status: o.status,
+        subtotal_paise: o.subtotal_paise,
+        created_at: o.created_at,
+        round_number: o.round_number,
+        items: itemsBy[o.id] || [],
+        is_paid: o.is_paid,
+        bill: ledger.bill
+          ? {
+              id: ledger.bill.id,
+              bill_number: ledger.bill.bill_number,
+              status: ledger.bill.status,
+              grand_total_paise: ledger.bill.grand_total_paise,
+              receipt_token_hash: ledger.bill.receipt_token_hash,
+              settled_at: ledger.bill.settled_at
+            }
+          : null
+      }));
 
-      if (roundRes.rows.length > 0) {
-        roundNumber = parseInt(roundRes.rows[0].round_number, 10);
-      }
-
-      const allSessionOrdersRes = await query(
-        `SELECT 
-          so.id,
-          so.order_number,
-          so.status,
-          so.subtotal_paise,
-          so.created_at,
-          (
-            SELECT COUNT(*) + 1 
-            FROM orders prev 
-            WHERE prev.table_session_id = so.table_session_id 
-              AND prev.restaurant_id = so.restaurant_id 
-              AND prev.status NOT IN ('cancelled', 'rejected') 
-              AND prev.created_at < so.created_at
-          ) as round_number,
-          COALESCE(
-            (
-              SELECT json_agg(json_build_object(
-                'id', oi.id,
-                'name_snapshot', oi.name_snapshot,
-                'name', oi.name_snapshot,
-                'quantity', oi.quantity,
-                'unit_price_paise', oi.unit_price_paise,
-                'total_price_paise', oi.total_price_paise,
-                'variant_name_snapshot', oi.variant_name_snapshot,
-                'variant_name', oi.variant_name_snapshot,
-                'modifiers', COALESCE(
-                  (
-                    SELECT json_agg(json_build_object('name', oim.name_snapshot, 'price_paise', oim.unit_price_paise))
-                    FROM order_item_modifiers oim WHERE oim.order_item_id = oi.id
-                  ), '[]'::json
-                )
-              ))
-              FROM order_items oi WHERE oi.order_id = so.id
-            ), '[]'::json
-          ) as items,
-          (
-            SELECT json_build_object(
-              'id', b.id,
-              'bill_number', b.bill_number,
-              'status', b.status,
-              'grand_total_paise', b.grand_total_paise,
-              'receipt_token_hash', b.receipt_token_hash,
-              'settled_at', b.settled_at
-            )
-            FROM bills b
-            WHERE b.restaurant_id = so.restaurant_id 
-              AND (
-                b.order_id = so.id 
-                OR (b.table_session_id = so.table_session_id AND (b.order_id IS NULL OR b.order_id = so.id) AND b.created_at >= so.created_at)
-              )
-            ORDER BY b.created_at DESC LIMIT 1
-          ) as bill,
-          (
-            SELECT COALESCE(
-              (
-                SELECT TRUE FROM bills b
-                WHERE b.restaurant_id = so.restaurant_id 
-                  AND (
-                    b.order_id = so.id 
-                    OR (b.table_session_id = so.table_session_id AND (b.order_id IS NULL OR b.order_id = so.id) AND b.created_at >= so.created_at)
-                  )
-                  AND b.status = 'paid'
-                LIMIT 1
-              ),
-              so.status = 'completed'
-            )
-          ) as is_paid
-         FROM orders so
-         WHERE so.table_session_id = $1 AND so.restaurant_id = $2 AND so.status NOT IN ('cancelled', 'rejected')
-         ORDER BY so.created_at ASC`,
-        [order.table_session_id, restaurant.id]
-      );
-      sessionOrders = allSessionOrdersRes.rows;
-      sessionUnpaidPaise = sessionOrders.reduce((sum, o) => sum + (o.is_paid ? 0 : (o.subtotal_paise || 0)), 0);
+      const me = ledger.orders.find((o: any) => o.id === order.id);
+      if (me) roundNumber = me.round_number;
+      // this order is paid only if its own part has been settled
+      order.__is_paid = me ? me.is_paid : false;
     }
 
     res.json({
       order: {
-        ...order,
+        ...Object.fromEntries(Object.entries(order).filter(([k]) => k !== '__is_paid')),
         items: itemsRes.rows,
-        bill,
-        is_paid: isPaid,
-        receipt_token: bill?.receipt_token_hash || null,
+        bill: sessionBill,
+        is_paid: order.table_session_id ? Boolean(order.__is_paid) : (bill?.status === 'paid' || order.status === 'completed'),
+        receipt_token: sessionBill?.receipt_token_hash || null,
         round_number: roundNumber,
         session_subtotal_paise: sessionSubtotalPaise,
+        session_total_paise: sessionTotalPaise,
+        session_paid_paise: sessionPaidPaise,
         session_unpaid_paise: sessionUnpaidPaise,
         session_orders: sessionOrders
       }
@@ -600,7 +659,12 @@ ordersRouter.get('/staff/list', resolveTenant, requireStaff(['manager', 'waiter'
             'quantity', oi.quantity
           )) FROM order_items oi WHERE oi.order_id = o.id), '[]'::json
         ) as items,
-        (SELECT b.status FROM bills b WHERE (b.order_id = o.id OR (b.table_session_id = o.table_session_id AND o.table_session_id IS NOT NULL)) ORDER BY b.created_at DESC LIMIT 1) as bill_status
+        (SELECT b.status FROM bills b WHERE b.status != 'voided' AND (b.order_id = o.id OR (b.table_session_id = o.table_session_id AND o.table_session_id IS NOT NULL AND b.order_id IS NULL)) ORDER BY b.created_at DESC LIMIT 1) as bill_status,
+        EXISTS (
+          SELECT 1 FROM bills b
+          WHERE b.status != 'voided' AND b.settled_at IS NOT NULL AND o.created_at <= b.settled_at
+            AND (b.order_id = o.id OR (b.table_session_id = o.table_session_id AND o.table_session_id IS NOT NULL AND b.order_id IS NULL))
+        ) as is_paid
       FROM orders o
       LEFT JOIN dining_tables dt ON dt.id = o.table_id
       LEFT JOIN customers c ON c.id = o.customer_id
@@ -655,17 +719,31 @@ ordersRouter.patch('/:id/status', resolveTenant, requireStaff(['manager', 'waite
       return;
     }
 
-    const updated = await query(
-      `UPDATE orders SET status = $1, updated_at = now() WHERE id = $2 RETURNING *`,
-      [status, id]
-    );
+    const result = await withTransaction(async (client) => {
+      const updated = await client.query(
+        `UPDATE orders SET status = $1, updated_at = now() WHERE id = $2 RETURNING *`,
+        [status, id]
+      );
 
-    // If order is ready, update kitchen ticket as well
-    if (status === 'ready') {
-      await query(`UPDATE kitchen_tickets SET status = 'ready', ready_at = now() WHERE order_id = $1`, [id]);
-    }
+      // If order is ready, update kitchen ticket as well
+      if (status === 'ready') {
+        await client.query(`UPDATE kitchen_tickets SET status = 'ready', ready_at = now() WHERE order_id = $1`, [id]);
+      }
 
-    res.json({ order: updated.rows[0] });
+      const sessionId = updated.rows[0].table_session_id;
+      if (sessionId) {
+        // Cancelled orders leave the bill; a served order of an already-paid bill completes the table
+        if (status === 'cancelled' || status === 'rejected') {
+          await syncSessionBill(client, restaurant.id, sessionId);
+        }
+        if (status === 'served' || status === 'completed' || status === 'cancelled' || status === 'rejected') {
+          await settleSessionIfPaid(client, restaurant.id, sessionId);
+        }
+      }
+      return updated.rows[0];
+    });
+
+    res.json({ order: result });
   } catch (err: any) {
     console.error('Update order status error:', err);
     res.status(500).json({ error: 'SERVER_ERROR', message: 'Failed to update order status.' });
@@ -696,6 +774,9 @@ ordersRouter.delete('/:id', resolveTenant, requireStaff(['manager', 'waiter']), 
       }
 
       const deletedOrder = oRes.rows[0];
+      if (deletedOrder.table_session_id) {
+        await syncSessionBill(client, restaurant.id, deletedOrder.table_session_id);
+      }
 
       // 3. If dine-in, check if table has any remaining active orders
       if (deletedOrder.table_id) {

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { 
   Search, 
@@ -10,6 +10,7 @@ import {
   UtensilsCrossed,
   Sparkles,
   ChevronRight,
+  ChevronLeft,
   Receipt
 } from 'lucide-react';
 import { publicApi, customerApi } from '../../services/api.js';
@@ -17,6 +18,157 @@ import { MenuCategory, MenuItem } from '../../types/index.js';
 import { useCart } from '../../context/CartContext.js';
 import { useTenant } from '../../context/TenantContext.js';
 import { ItemModal } from './ItemModal.js';
+
+/* Horizontal swipe row for one category */
+const CategoryRow: React.FC<{
+  items: MenuItem[];
+  onSelect: (item: MenuItem) => void;
+}> = ({ items, onSelect }) => {
+  const rowRef = useRef<HTMLDivElement>(null);
+  const [canLeft, setCanLeft] = useState(false);
+  const [canRight, setCanRight] = useState(false);
+
+  const updateArrows = () => {
+    const el = rowRef.current;
+    if (!el) return;
+    setCanLeft(el.scrollLeft > 8);
+    setCanRight(el.scrollLeft + el.clientWidth < el.scrollWidth - 8);
+  };
+
+  useEffect(() => {
+    updateArrows();
+    window.addEventListener('resize', updateArrows);
+    return () => window.removeEventListener('resize', updateArrows);
+  }, [items]);
+
+  const scrollByCard = (dir: 1 | -1) => {
+    const el = rowRef.current;
+    if (!el) return;
+    el.scrollBy({ left: dir * Math.max(el.clientWidth * 0.8, 260), behavior: 'smooth' });
+  };
+
+  return (
+    <div className="relative group/row">
+      <div
+        ref={rowRef}
+        onScroll={updateArrows}
+        className="menu-row flex gap-4 overflow-x-auto snap-x snap-mandatory scroll-smooth px-4 pb-3 -mx-4"
+      >
+        {items.map((item) => (
+          <article
+            key={item.id}
+            onClick={() => item.is_available && onSelect(item)}
+            className={`snap-start shrink-0 w-[78%] sm:w-[17rem] bg-white dark:bg-slate-900 rounded-3xl border border-slate-200/70 dark:border-slate-800 shadow-sm hover:shadow-xl hover:-translate-y-0.5 transition-all duration-300 ease-out overflow-hidden ${
+              item.is_available ? 'cursor-pointer' : 'opacity-70'
+            }`}
+          >
+            {/* Image box */}
+            <div className="relative aspect-[4/3] w-full overflow-hidden bg-slate-100 dark:bg-slate-800">
+              {item.image_url ? (
+                <img
+                  src={item.image_url}
+                  alt={item.name}
+                  loading="lazy"
+                  className={`w-full h-full object-cover transition-transform duration-500 ease-out hover:scale-105 ${
+                    item.is_available ? '' : 'grayscale'
+                  }`}
+                />
+              ) : (
+                <div className="w-full h-full flex items-center justify-center bg-gradient-to-br from-slate-100 to-slate-200 dark:from-slate-800 dark:to-slate-900">
+                  <UtensilsCrossed className="w-10 h-10 text-slate-300 dark:text-slate-600" />
+                </div>
+              )}
+
+              {/* soft bottom fade for price legibility */}
+              <div className="absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-black/30 to-transparent pointer-events-none" />
+
+              {/* Dietary mark */}
+              <span
+                className={`absolute top-3 left-3 w-5 h-5 rounded-md bg-white/95 flex items-center justify-center border-2 ${
+                  item.dietary_type === 'non_veg' ? 'border-rose-500' : 'border-emerald-500'
+                }`}
+              >
+                <span
+                  className={`w-2 h-2 rounded-full ${
+                    item.dietary_type === 'non_veg' ? 'bg-rose-500' : 'bg-emerald-500'
+                  }`}
+                />
+              </span>
+
+              {!item.is_available && (
+                <span className="absolute top-3 right-3 px-2.5 py-1 rounded-full bg-slate-900/80 text-white text-[10px] font-bold uppercase tracking-wider">
+                  Sold Out
+                </span>
+              )}
+
+              {/* Price tag, bottom-right inside image */}
+              <div className="absolute bottom-3 right-3 px-3 py-1.5 rounded-xl bg-white/95 dark:bg-slate-900/90 backdrop-blur shadow-lg text-sm font-black text-slate-900 dark:text-white">
+                ₹{(item.base_price_paise / 100).toFixed(0)}
+              </div>
+            </div>
+
+            {/* Details */}
+            <div className="p-4 flex flex-col gap-3">
+              <div>
+                <h3 className="font-bold text-[15px] text-slate-900 dark:text-white leading-snug line-clamp-1">
+                  {item.name}
+                </h3>
+                <p className="mt-1 text-xs text-slate-500 dark:text-slate-400 leading-relaxed line-clamp-2 min-h-[2.5rem]">
+                  {item.description || ' '}
+                </p>
+              </div>
+
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-1.5 text-[11px] font-medium text-slate-400">
+                  <Clock className="w-3.5 h-3.5" />
+                  <span>{item.preparation_time_minutes} min</span>
+                </div>
+
+                {item.is_available ? (
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onSelect(item);
+                    }}
+                    className="bg-rose-600 hover:bg-rose-700 text-white font-bold px-4 py-2 rounded-xl text-xs flex items-center gap-1 transition-all active:scale-95 shadow-sm"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>ADD</span>
+                  </button>
+                ) : (
+                  <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">
+                    Unavailable
+                  </span>
+                )}
+              </div>
+            </div>
+          </article>
+        ))}
+        <div className="shrink-0 w-1" aria-hidden />
+      </div>
+
+      {/* Desktop arrows */}
+      {canLeft && (
+        <button
+          onClick={() => scrollByCard(-1)}
+          aria-label="Scroll left"
+          className="hidden sm:flex absolute left-1 top-[7rem] -translate-y-1/2 w-9 h-9 rounded-full bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 shadow-lg items-center justify-center text-slate-700 dark:text-slate-200 hover:scale-105 transition-transform"
+        >
+          <ChevronLeft className="w-4 h-4" />
+        </button>
+      )}
+      {canRight && (
+        <button
+          onClick={() => scrollByCard(1)}
+          aria-label="Scroll right"
+          className="hidden sm:flex absolute right-1 top-[7rem] -translate-y-1/2 w-9 h-9 rounded-full bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 shadow-lg items-center justify-center text-slate-700 dark:text-slate-200 hover:scale-105 transition-transform"
+        >
+          <ChevronRight className="w-4 h-4" />
+        </button>
+      )}
+    </div>
+  );
+};
 
 export const CustomerMenu: React.FC = () => {
   const navigate = useNavigate();
@@ -52,24 +204,46 @@ export const CustomerMenu: React.FC = () => {
       });
   }, []);
 
-  const handleCallWaiter = async (type: string) => {
+  // Highlight active category tab while scrolling
+  useEffect(() => {
+    if (isLoading) return;
+    const sections = document.querySelectorAll('[data-cat-section]');
+    if (!sections.length) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const visible = entries.filter((e) => e.isIntersecting);
+        if (visible.length > 0) {
+          const id = (visible[0].target as HTMLElement).dataset.catSection;
+          if (id) setActiveCategoryId(id);
+        }
+      },
+      { rootMargin: '-35% 0px -55% 0px' }
+    );
+    sections.forEach((el) => observer.observe(el));
+    return () => observer.disconnect();
+  }, [isLoading, categories, searchQuery, dietaryFilter]);
+
+  const handleCallWaiter = (type: string) => {
     if (!tableContext.tableId || !tableContext.sessionId) {
       alert('Service requests are only available for dine-in tables with an active QR session.');
       return;
     }
 
-    try {
-      await customerApi.requestService({
+    // Instant feedback; the request is sent in the background
+    setIsCallingWaiter(false);
+    setCallSuccess(`Staff notified for "${type.toUpperCase()}".`);
+    setTimeout(() => setCallSuccess(null), 4000);
+
+    customerApi
+      .requestService({
         table_id: tableContext.tableId,
         table_session_id: tableContext.sessionId,
         request_type: type
+      })
+      .catch((err: any) => {
+        setCallSuccess(null);
+        alert(err?.message || 'Failed to call staff.');
       });
-      setIsCallingWaiter(false);
-      setCallSuccess(`Staff notified for "${type.toUpperCase()}".`);
-      setTimeout(() => setCallSuccess(null), 4000);
-    } catch (err: any) {
-      alert(err.message || 'Failed to call staff.');
-    }
   };
 
   // Filter items
@@ -98,13 +272,13 @@ export const CustomerMenu: React.FC = () => {
     <div className="min-h-screen bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 pb-28">
       {/* Top Navigation & Dynamic Restaurant Identity */}
       <header className="sticky top-0 z-30 bg-white/90 dark:bg-slate-900/90 backdrop-blur border-b border-slate-200/80 dark:border-slate-800">
-        <div className="max-w-3xl mx-auto px-4 h-16 flex items-center justify-between">
+        <div className="max-w-3xl mx-auto px-4 h-12 flex items-center justify-between">
           <div className="flex items-center gap-3">
             {restaurant?.logo_url ? (
-              <img src={restaurant.logo_url} alt="" className="w-9 h-9 rounded-xl object-cover border border-slate-200 dark:border-slate-800" />
+              <img src={restaurant.logo_url} alt="" className="w-8 h-8 rounded-lg object-cover border border-slate-200 dark:border-slate-800" />
             ) : (
               <div
-                className="w-9 h-9 rounded-xl flex items-center justify-center font-bold text-white text-sm"
+                className="w-8 h-8 rounded-lg flex items-center justify-center font-bold text-white text-sm"
                 style={{ backgroundColor: restaurant?.primary_color || '#e11d48' }}
               >
                 {restaurant?.name?.charAt(0) || 'R'}
@@ -134,7 +308,7 @@ export const CustomerMenu: React.FC = () => {
             {tableContext.tableId && (
               <button
                 onClick={() => setIsCallingWaiter(true)}
-                className="p-2.5 rounded-xl border border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 text-xs font-semibold flex items-center gap-1.5"
+                className="p-2 rounded-xl border border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 text-xs font-semibold flex items-center gap-1.5"
                 title="Call staff / Request service"
               >
                 <Bell className="w-4 h-4 text-amber-500" />
@@ -146,7 +320,7 @@ export const CustomerMenu: React.FC = () => {
             {tableContext.sessionId && (
               <button
                 onClick={() => navigate('/u/customer/bill')}
-                className="p-2.5 rounded-xl border border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 text-xs font-semibold flex items-center gap-1.5"
+                className="p-2 rounded-xl border border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 text-xs font-semibold flex items-center gap-1.5"
                 title="View Table Running Bill"
               >
                 <Receipt className="w-4 h-4 text-indigo-500" />
@@ -156,58 +330,59 @@ export const CustomerMenu: React.FC = () => {
           </div>
         </div>
 
-        {/* Search Bar & Dietary Filter Pills */}
-        <div className="max-w-3xl mx-auto px-4 pb-3 space-y-3">
-          <div className="relative">
-            <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+        {/* Search Bar & Dietary Filters (single compact row) */}
+        <div className="max-w-3xl mx-auto px-4 pb-2 flex items-center gap-2">
+          <div className="relative flex-1">
+            <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
             <input
               type="text"
               placeholder="Search dishes, drinks, desserts..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full bg-slate-100 dark:bg-slate-800/80 border-none rounded-xl pl-10 pr-4 py-2.5 text-xs text-slate-900 dark:text-white placeholder-slate-400 focus:ring-2 focus:ring-rose-500"
+              className="w-full bg-slate-100 dark:bg-slate-800/80 border-none rounded-xl pl-9 pr-3 py-2 text-xs text-slate-900 dark:text-white placeholder-slate-400 focus:ring-2 focus:ring-rose-500"
             />
           </div>
 
-          {/* Dietary Filters */}
-          <div className="flex items-center gap-2 text-xs font-semibold overflow-x-auto pb-1 scrollbar-none">
+          <div className="flex items-center gap-1.5 text-xs font-semibold shrink-0">
             <button
               onClick={() => setDietaryFilter('all')}
-              className={`px-3 py-1.5 rounded-full transition-all shrink-0 ${
+              className={`px-3 py-2 rounded-xl transition-all ${
                 dietaryFilter === 'all'
                   ? 'bg-slate-900 dark:bg-white text-white dark:text-slate-900'
                   : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400'
               }`}
             >
-              All Items
+              All
             </button>
             <button
               onClick={() => setDietaryFilter('veg')}
-              className={`px-3 py-1.5 rounded-full transition-all shrink-0 flex items-center gap-1.5 ${
+              title="Pure Veg"
+              aria-label="Pure Veg"
+              className={`w-8 h-8 rounded-xl flex items-center justify-center transition-all border ${
                 dietaryFilter === 'veg'
-                  ? 'bg-emerald-600 text-white'
-                  : 'bg-emerald-50 dark:bg-emerald-950/20 text-emerald-700 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-800/40'
+                  ? 'bg-emerald-600 border-emerald-600'
+                  : 'bg-emerald-50 dark:bg-emerald-950/20 border-emerald-200 dark:border-emerald-800/40'
               }`}
             >
-              <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
-              Pure Veg
+              <span className={`w-2.5 h-2.5 rounded-full ${dietaryFilter === 'veg' ? 'bg-white' : 'bg-emerald-500'}`}></span>
             </button>
             <button
               onClick={() => setDietaryFilter('non_veg')}
-              className={`px-3 py-1.5 rounded-full transition-all shrink-0 flex items-center gap-1.5 ${
+              title="Non-Veg"
+              aria-label="Non-Veg"
+              className={`w-8 h-8 rounded-xl flex items-center justify-center transition-all border ${
                 dietaryFilter === 'non_veg'
-                  ? 'bg-rose-600 text-white'
-                  : 'bg-rose-50 dark:bg-rose-950/20 text-rose-700 dark:text-rose-400 border border-rose-200 dark:border-rose-800/40'
+                  ? 'bg-rose-600 border-rose-600'
+                  : 'bg-rose-50 dark:bg-rose-950/20 border-rose-200 dark:border-rose-800/40'
               }`}
             >
-              <span className="w-2 h-2 rounded-full bg-rose-500"></span>
-              Non-Veg
+              <span className={`w-2.5 h-2.5 rounded-full ${dietaryFilter === 'non_veg' ? 'bg-white' : 'bg-rose-500'}`}></span>
             </button>
           </div>
         </div>
 
         {/* Category Scroll Tabs */}
-        <div className="max-w-3xl mx-auto px-4 flex items-center gap-2 overflow-x-auto pb-2 scrollbar-none border-t border-slate-100 dark:border-slate-800/60 pt-2">
+        <div className="max-w-3xl mx-auto px-4 flex items-center gap-2 overflow-x-auto pb-2 scrollbar-none border-t border-slate-100 dark:border-slate-800/60 pt-1.5">
           {categories.map((cat) => (
             <button
               key={cat.id}
@@ -216,7 +391,7 @@ export const CustomerMenu: React.FC = () => {
                 const el = document.getElementById(`cat_${cat.id}`);
                 if (el) el.scrollIntoView({ behavior: 'smooth' });
               }}
-              className={`px-3.5 py-1.5 rounded-xl text-xs font-semibold shrink-0 transition-all ${
+              className={`px-3 py-1 rounded-lg text-xs font-semibold shrink-0 transition-all ${
                 activeCategoryId === cat.id
                   ? 'bg-rose-600 text-white shadow-sm'
                   : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'
@@ -232,7 +407,7 @@ export const CustomerMenu: React.FC = () => {
       </header>
 
       {/* Main Content Menu Sections */}
-      <main className="max-w-3xl mx-auto px-4 py-6 space-y-8">
+      <main className="max-w-3xl mx-auto px-4 py-6 space-y-10">
         {callSuccess && (
           <div className="p-3.5 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-600 dark:text-emerald-400 text-xs font-semibold flex items-center gap-2">
             <Check className="w-4 h-4" />
@@ -246,84 +421,27 @@ export const CustomerMenu: React.FC = () => {
           </div>
         ) : (
           filteredCategories.map((cat) => (
-            <section key={cat.id} id={`cat_${cat.id}`} className="space-y-4">
-              <div className="border-b border-slate-200/80 dark:border-slate-800/80 pb-2">
-                <h2 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
-                  {cat.name}
-                  <span className="text-xs font-normal text-slate-400">({cat.items.length})</span>
-                </h2>
-                {cat.description && (
-                  <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">{cat.description}</p>
-                )}
+            <section
+              key={cat.id}
+              id={`cat_${cat.id}`}
+              data-cat-section={cat.id}
+              className="space-y-4 scroll-mt-36"
+            >
+              <div className="flex items-end justify-between">
+                <div>
+                  <h2 className="text-lg font-extrabold tracking-tight text-slate-900 dark:text-white">
+                    {cat.name}
+                  </h2>
+                  {cat.description && (
+                    <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">{cat.description}</p>
+                  )}
+                </div>
+                <span className="text-[11px] font-semibold text-slate-400 shrink-0 ml-3">
+                  {cat.items.length} {cat.items.length === 1 ? 'item' : 'items'}
+                </span>
               </div>
 
-              {/* Items Grid */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                {cat.items.map((item) => (
-                  <div
-                    key={item.id}
-                    className={`bg-white dark:bg-slate-900 border rounded-2xl p-4 flex gap-4 transition-all hover:shadow-md ${
-                      item.is_available
-                        ? 'border-slate-200/80 dark:border-slate-800'
-                        : 'border-slate-200 dark:border-slate-800 opacity-60'
-                    }`}
-                  >
-                    {/* Item Text & Pricing */}
-                    <div className="flex-1 flex flex-col justify-between">
-                      <div>
-                        <div className="flex items-center gap-1.5 mb-1">
-                          <span className={`w-2.5 h-2.5 rounded-full shrink-0 ${
-                            item.dietary_type === 'veg' ? 'bg-emerald-500' : 'bg-rose-500'
-                          }`}></span>
-                          <h3 className="font-bold text-xs sm:text-sm text-slate-900 dark:text-white leading-snug">
-                            {item.name}
-                          </h3>
-                        </div>
-
-                        {item.description && (
-                          <p className="text-[11px] text-slate-500 dark:text-slate-400 line-clamp-2 leading-relaxed">
-                            {item.description}
-                          </p>
-                        )}
-                      </div>
-
-                      <div className="mt-3 flex items-center justify-between">
-                        <div>
-                          <div className="font-black text-sm text-slate-900 dark:text-white">
-                            ₹{(item.base_price_paise / 100).toFixed(0)}
-                          </div>
-                          <div className="flex items-center gap-1 text-[10px] text-slate-400">
-                            <Clock className="w-3 h-3" />
-                            <span>{item.preparation_time_minutes}m</span>
-                          </div>
-                        </div>
-
-                        {/* Add Button */}
-                        {item.is_available ? (
-                          <button
-                            onClick={() => setSelectedItem(item)}
-                            className="bg-rose-50 hover:bg-rose-100 dark:bg-rose-950/30 dark:hover:bg-rose-900/40 text-rose-600 dark:text-rose-400 border border-rose-200 dark:border-rose-900/50 font-bold px-3 py-1.5 rounded-xl text-xs flex items-center gap-1 transition-all active:scale-95"
-                          >
-                            <Plus className="w-3.5 h-3.5" />
-                            <span>ADD</span>
-                          </button>
-                        ) : (
-                          <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">
-                            Sold Out
-                          </span>
-                        )}
-                      </div>
-                    </div>
-
-                    {/* Image */}
-                    {item.image_url && (
-                      <div className="w-24 h-24 rounded-xl overflow-hidden shrink-0 bg-slate-100 dark:bg-slate-800">
-                        <img src={item.image_url} alt="" className="w-full h-full object-cover" />
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </div>
+              <CategoryRow items={cat.items} onSelect={setSelectedItem} />
             </section>
           ))
         )}

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { 
   ArrowLeft, 
@@ -76,26 +76,31 @@ export const CustomerCart: React.FC = () => {
     }
   }, [tables, tableContext.tableNumber, tableContext.tableId]);
 
-  // Instant 0ms table selection (zero lag, non-blocking)
+  // Tracks the most recent table tap so late responses from earlier taps are ignored
+  const selectionSeq = useRef(0);
+
   const handleSelectTable = (t: any) => {
     setTableError(null);
+    const seq = ++selectionSeq.current;
 
-    // 1. Instant client update (0 milliseconds!)
+    // Instant client update. Previous table's session must NOT carry over.
     setTableContext({
       tableId: t.id,
       tableNumber: t.table_number,
-      sessionId: tableContext.sessionId
+      sessionId: null
     });
     setOrderType('dine_in');
 
-    // 2. Silent background sync without delaying the user
-    publicApi.resolveQr(t.table_number)
+    // Read-only background lookup of an already-open session (never creates one,
+    // never marks the table occupied). Stale responses are discarded.
+    publicApi.resolveQr(t.table_number, undefined, true)
       .then((res) => {
-        if (res?.session?.id) {
+        if (seq !== selectionSeq.current) return;
+        if (res?.table?.id === t.id) {
           setTableContext({
-            tableId: res.table.id,
-            tableNumber: res.table.table_number,
-            sessionId: res.session.id
+            tableId: t.id,
+            tableNumber: t.table_number,
+            sessionId: res.session?.id || null
           });
         }
       })
@@ -104,12 +109,29 @@ export const CustomerCart: React.FC = () => {
       });
   };
 
-  const handleProceedToCheckout = () => {
+  const handleProceedToCheckout = async () => {
     if (orderType === 'dine_in' && !tableContext.tableId) {
       setTableError('Please choose your seated table below before proceeding to checkout.');
       const el = document.getElementById('table-selector-section');
       if (el) el.scrollIntoView({ behavior: 'smooth' });
       return;
+    }
+
+    // Bind a session only now that the customer is actually proceeding to order.
+    // (Table occupancy is still decided purely by placed orders on the server.)
+    if (orderType === 'dine_in' && tableContext.tableNumber && !tableContext.sessionId) {
+      try {
+        const res = await publicApi.resolveQr(tableContext.tableNumber);
+        if (res?.session?.id && res?.table?.id === tableContext.tableId) {
+          setTableContext({
+            tableId: res.table.id,
+            tableNumber: res.table.table_number,
+            sessionId: res.session.id
+          });
+        }
+      } catch (err) {
+        console.debug('Session bind skipped:', err);
+      }
     }
     navigate('/u/customer/checkout');
   };
@@ -246,15 +268,7 @@ export const CustomerCart: React.FC = () => {
             ) : (
               <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-2.5">
                 {tables.map((t) => {
-                  const ctxDigits = (tableContext.tableNumber || '').replace(/\D/g, '');
-                  const ctxNum = ctxDigits ? parseInt(ctxDigits, 10) : null;
-                  const tDigits = (t.table_number || '').replace(/\D/g, '');
-                  const tNum = tDigits ? parseInt(tDigits, 10) : null;
-
-                  const isSelected =
-                    tableContext.tableId === t.id ||
-                    (ctxNum !== null && tNum !== null && ctxNum === tNum) ||
-                    tableContext.tableNumber === t.table_number;
+                  const isSelected = tableContext.tableId === t.id;
                   const isOccupied = t.status === 'occupied' && !isSelected;
 
                   return (

@@ -53,10 +53,6 @@ restaurantRouter.get('/tables', resolveTenant, async (req: Request, res: Respons
               AND o.restaurant_id = dt.restaurant_id 
               AND o.status NOT IN ('completed', 'cancelled', 'rejected')
           ) THEN 'occupied'
-          WHEN dt.status = 'occupied' AND EXISTS (
-            SELECT 1 FROM table_sessions ts 
-            WHERE ts.table_id = dt.id AND ts.status != 'closed'
-          ) THEN 'occupied'
           ELSE 'available'
         END as status,
         dt.is_active
@@ -186,6 +182,31 @@ restaurantRouter.get('/qr/resolve', async (req: Request, res: Response) => {
       return;
     }
 
+    // Browse mode (customer is only picking a table in the cart): read-only.
+    // Never create a session or touch table status until an order is actually placed.
+    if (req.query.browse === '1') {
+      const existing = await query(
+        `SELECT * FROM table_sessions 
+         WHERE restaurant_id = $1 AND table_id = $2 AND status IN ('open', 'bill_requested', 'bill_generated')
+         ORDER BY opened_at DESC LIMIT 1`,
+        [qr.restaurant_id, qr.table_id]
+      );
+      const ex = existing.rows[0];
+      res.json({
+        valid: true,
+        restaurant: {
+          id: qr.restaurant_id,
+          name: qr.restaurant_name,
+          slug: qr.restaurant_slug,
+          logo_url: qr.restaurant_logo_url,
+          primary_color: qr.restaurant_primary_color
+        },
+        table: { id: qr.table_id, table_number: qr.table_number, capacity: qr.capacity },
+        session: ex ? { id: ex.id, status: ex.status, opened_at: ex.opened_at } : null
+      });
+      return;
+    }
+
     // Resolve or create active table session atomically
     const session = await withTransaction(async (client) => {
       let activeSession = await client.query(
@@ -210,11 +231,7 @@ restaurantRouter.get('/qr/resolve', async (req: Request, res: Response) => {
           [qr.restaurant_id, qr.table_id]
         );
 
-        // Update table status to occupied
-        await client.query(
-          `UPDATE dining_tables SET status = 'occupied' WHERE id = $1`,
-          [qr.table_id]
-        );
+        // Table is NOT marked occupied here; occupancy is derived from active orders only.
       }
 
       return activeSession.rows[0];

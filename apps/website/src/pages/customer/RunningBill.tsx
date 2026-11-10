@@ -6,6 +6,19 @@ import { useCart } from '../../context/CartContext.js';
 import { useTenant } from '../../context/TenantContext.js';
 import { ReceiptModal } from '../../components/ReceiptModal.js';
 
+// Same 5-step lifecycle as the order tracking page
+const PROGRESS_STEPS = ['Placed', 'Accepted', 'Preparing', 'Ready', 'Served'];
+const stepIndexFor = (status: string) => {
+  switch (status) {
+    case 'accepted': return 1;
+    case 'preparing': return 2;
+    case 'ready': return 3;
+    case 'served':
+    case 'completed': return 4;
+    default: return 0;
+  }
+};
+
 export const CustomerRunningBill: React.FC = () => {
   const navigate = useNavigate();
   const { restaurant } = useTenant();
@@ -47,18 +60,19 @@ export const CustomerRunningBill: React.FC = () => {
     return () => clearInterval(interval);
   }, [tableContext.sessionId]);
 
-  const handleRequestBill = async () => {
+  const handleRequestBill = () => {
     if (!tableContext.tableId || !tableContext.sessionId) return;
-    try {
-      await customerApi.requestService({
+    setRequestSent(true); // instant confirmation; server call runs in the background
+    customerApi
+      .requestService({
         table_id: tableContext.tableId,
         table_session_id: tableContext.sessionId,
         request_type: 'bill'
+      })
+      .catch((err: any) => {
+        setRequestSent(false);
+        alert(err?.message || 'Failed to request bill.');
       });
-      setRequestSent(true);
-    } catch (err: any) {
-      alert(err.message || 'Failed to request bill.');
-    }
   };
 
   const handlePayOnline = async () => {
@@ -106,7 +120,11 @@ export const CustomerRunningBill: React.FC = () => {
     );
   }
 
-  const isBillPaid = billRecord?.status === 'paid';
+  // Paid only when nothing is owed. A new dish on an already-paid bill makes the bill "partly paid".
+  const totalPaise: number = billData.total_paise ?? billData.grand_total_paise;
+  const paidPaise: number = billData.paid_paise ?? 0;
+  const unpaidPaise: number = billData.unpaid_paise ?? Math.max(0, totalPaise - paidPaise);
+  const isBillPaid = Boolean(billData.is_fully_paid) || (paidPaise > 0 && unpaidPaise === 0);
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 pb-24">
@@ -153,6 +171,45 @@ export const CustomerRunningBill: React.FC = () => {
           <div className="p-4 rounded-2xl bg-amber-500/10 border border-amber-500/30 text-amber-900 text-xs font-semibold flex items-center gap-2">
             <CheckCircle className="w-4 h-4 shrink-0 text-amber-600" />
             <span>Bill settlement requested! The floor captain is bringing the bill to your table.</span>
+          </div>
+        )}
+
+        {/* Live progress of every order on this table (guest-placed and waiter-added alike) */}
+        {billData.orders && billData.orders.length > 0 && (
+          <div className="bg-white border border-slate-200 rounded-3xl p-5 space-y-4 shadow-sm">
+            <div className="text-xs font-bold uppercase tracking-wider text-slate-400 pb-2 border-b border-slate-100">
+              Your Orders ({billData.orders.length})
+            </div>
+
+            {billData.orders.map((o: any) => {
+              const activeIndex = stepIndexFor(o.status);
+              const orderItems = (billData.items || []).filter((it: any) => it.order_id === o.id);
+              return (
+                <div key={o.id} className="space-y-2.5">
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="font-bold text-slate-900">
+                      Order {o.round_number} • {o.order_number}
+                    </span>
+                    <span className="text-[10px] font-black uppercase tracking-wider text-slate-500">
+                      {o.status === 'placed' ? 'Sent to kitchen' : o.status === 'completed' ? 'Completed' : PROGRESS_STEPS[activeIndex]}
+                    </span>
+                  </div>
+
+                  <div className="flex items-center gap-1">
+                    {PROGRESS_STEPS.map((label, i) => (
+                      <div key={label} className="flex-1">
+                        <div className={`h-1.5 rounded-full ${i <= activeIndex ? 'bg-emerald-500' : 'bg-slate-200'} ${i === activeIndex && activeIndex < 4 ? 'animate-pulse' : ''}`} />
+                        <div className={`mt-1 text-[9px] text-center ${i <= activeIndex ? 'text-emerald-700 font-bold' : 'text-slate-400'}`}>{label}</div>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div className="text-[11px] text-slate-500">
+                    {orderItems.map((it: any) => `${it.quantity}x ${it.name_snapshot}`).join(', ')}
+                  </div>
+                </div>
+              );
+            })}
           </div>
         )}
 
@@ -208,9 +265,21 @@ export const CustomerRunningBill: React.FC = () => {
           )}
 
           <div className="pt-3 border-t border-slate-100 flex justify-between font-black text-base text-slate-900">
-            <span>Grand Total</span>
+            <span>Total Bill</span>
+            <span>₹{(totalPaise / 100).toFixed(2)}</span>
+          </div>
+
+          {paidPaise > 0 && (
+            <div className="flex justify-between text-emerald-700 font-semibold">
+              <span>Already Paid</span>
+              <span>− ₹{(paidPaise / 100).toFixed(2)}</span>
+            </div>
+          )}
+
+          <div className="flex justify-between font-black text-base">
+            <span className="text-slate-900">{isBillPaid ? 'Unpaid Amount' : 'Unpaid Amount (to pay)'}</span>
             <span className={isBillPaid ? 'text-emerald-600' : 'text-rose-600'}>
-              {isBillPaid ? 'PAID ' : ''}₹{(billData.grand_total_paise / 100).toFixed(2)}
+              {isBillPaid ? 'PAID ₹0.00' : `₹${(unpaidPaise / 100).toFixed(2)}`}
             </span>
           </div>
         </div>
@@ -224,7 +293,7 @@ export const CustomerRunningBill: React.FC = () => {
               className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-black py-4 rounded-2xl text-sm transition-all shadow-xl shadow-emerald-900/30 flex items-center justify-center gap-2 disabled:opacity-50"
             >
               <CreditCard className="w-5 h-5" />
-              {isPaying ? 'Processing Online Payment...' : 'Pay Bill Online (UPI / Card)'}
+              {isPaying ? 'Processing Online Payment...' : `Pay Unpaid ₹${(unpaidPaise / 100).toFixed(2)} Online (UPI / Card)`}
             </button>
 
             <button

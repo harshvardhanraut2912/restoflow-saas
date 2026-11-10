@@ -28,10 +28,15 @@ tablesRouter.get('/', resolveTenant, requireStaff(['manager', 'waiter']), async 
               AND o.restaurant_id = dt.restaurant_id 
               AND o.status NOT IN ('completed', 'cancelled', 'rejected')
           ) THEN 'occupied'
-          WHEN dt.status = 'occupied' AND ts.id IS NOT NULL AND ts.status != 'closed' THEN 'occupied'
           ELSE 'available'
         END as status,
-        ts.id as active_session_id,
+        COALESCE(ts.id, (
+          SELECT o2.table_session_id FROM orders o2
+          WHERE o2.table_id = dt.id AND o2.restaurant_id = dt.restaurant_id
+            AND o2.status NOT IN ('completed', 'cancelled', 'rejected')
+            AND o2.table_session_id IS NOT NULL
+          ORDER BY o2.created_at DESC LIMIT 1
+        )) as active_session_id,
         ts.status as session_status,
         ts.opened_at as session_opened_at,
         tqr.token_hash as active_qr_hash

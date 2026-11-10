@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { 
   ChefHat, 
@@ -10,7 +10,9 @@ import {
   RefreshCw, 
   LogOut,
   Utensils,
-  Trash2
+  Trash2,
+  Flame,
+  BellRing
 } from 'lucide-react';
 import { kitchenApi, ApiError } from '../../services/api.js';
 import { useStaffAuth } from '../../context/StaffAuthContext.js';
@@ -26,6 +28,27 @@ export const KitchenKDS: React.FC = () => {
   const [isLoading, setIsLoading] = useState(true);
   const [soundEnabled, setSoundEnabled] = useState(true);
   const [lastTicketCount, setLastTicketCount] = useState(0);
+  const [filter, setFilter] = useState<'all' | 'new' | 'preparing'>('all');
+  // Optimistic actions awaiting server confirmation: ticketId -> target status ('void' = removed)
+  const pending = useRef<Record<string, string>>({});
+  const [, setTick] = useState(0);
+
+  // Refresh elapsed timers every 20s
+  useEffect(() => {
+    const i = setInterval(() => setTick((n) => n + 1), 20000);
+    return () => clearInterval(i);
+  }, []);
+
+  const counts = useMemo(
+    () => ({
+      new: tickets.filter((t) => t.ticket_status === 'new').length,
+      preparing: tickets.filter((t) => t.ticket_status !== 'new').length
+    }),
+    [tickets]
+  );
+  const visible = tickets.filter((t) =>
+    filter === 'all' ? true : filter === 'new' ? t.ticket_status === 'new' : t.ticket_status !== 'new'
+  );
 
   const playChime = () => {
     if (!soundEnabled) return;
@@ -50,7 +73,19 @@ export const KitchenKDS: React.FC = () => {
   const loadTickets = async () => {
     try {
       const data = await kitchenApi.getTickets();
-      const newTickets = data.tickets || [];
+      // Apply optimistic state on top of server data so polling never flips a button back
+      const serverTickets: any[] = data.tickets || [];
+      const serverIds = new Set(serverTickets.map((t) => t.ticket_id));
+      Object.keys(pending.current).forEach((id) => {
+        const target = pending.current[id];
+        const st = serverTickets.find((t) => t.ticket_id === id);
+        const gone = (target === 'ready' || target === 'void') && !serverIds.has(id);
+        const matched = st && st.ticket_status === target;
+        if (gone || matched) delete pending.current[id];
+      });
+      const newTickets = serverTickets
+        .filter((t) => pending.current[t.ticket_id] !== 'ready' && pending.current[t.ticket_id] !== 'void')
+        .map((t) => (pending.current[t.ticket_id] ? { ...t, ticket_status: pending.current[t.ticket_id] } : t));
       if (newTickets.length > lastTicketCount && lastTicketCount > 0) {
         playChime();
       }
@@ -74,11 +109,23 @@ export const KitchenKDS: React.FC = () => {
   }, [lastTicketCount]);
 
   const handleUpdateStatus = async (ticketId: string, status: 'acknowledged' | 'preparing' | 'ready') => {
+    if (pending.current[ticketId] === status) return;
+
+    // 1. Instant UI: flip the button / remove the ticket right now
+    pending.current[ticketId] = status;
+    setTickets((prev) =>
+      status === 'ready'
+        ? prev.filter((t) => t.ticket_id !== ticketId)
+        : prev.map((t) => (t.ticket_id === ticketId ? { ...t, ticket_status: status } : t))
+    );
+
+    // 2. Sync with the server in the background
     try {
       await kitchenApi.updateStatus(ticketId, status);
-      loadTickets();
     } catch (err: any) {
+      delete pending.current[ticketId];
       alert(err.message || 'Failed to update ticket.');
+      loadTickets();
     }
   };
 
@@ -87,16 +134,21 @@ export const KitchenKDS: React.FC = () => {
       return;
     }
 
+    pending.current[ticketId] = 'void';
+    setTickets((prev) => prev.filter((t) => t.ticket_id !== ticketId));
+
     try {
       await kitchenApi.deleteTicket(ticketId, 'Cancelled from Kitchen Display');
-      loadTickets();
     } catch (err: any) {
+      delete pending.current[ticketId];
       alert(err.message || 'Failed to cancel order ticket.');
+      loadTickets();
     }
   };
 
+  const getMins = (created_at: string) => Math.floor((Date.now() - new Date(created_at).getTime()) / 60000);
   const getElapsedTime = (created_at: string) => {
-    const diffMins = Math.floor((Date.now() - new Date(created_at).getTime()) / 60000);
+    const diffMins = getMins(created_at);
     if (diffMins < 1) return 'Just now';
     return `${diffMins}m ago`;
   };
@@ -121,6 +173,25 @@ export const KitchenKDS: React.FC = () => {
         </div>
 
         <div className="flex items-center gap-3">
+          <div className="hidden md:flex items-center gap-1 bg-slate-100 dark:bg-slate-800 p-1 rounded-xl text-xs font-bold">
+            {([
+              ['all', `All (${tickets.length})`],
+              ['new', `New (${counts.new})`],
+              ['preparing', `Cooking (${counts.preparing})`]
+            ] as const).map(([key, label]) => (
+              <button
+                key={key}
+                onClick={() => setFilter(key)}
+                className={`px-3 py-1.5 rounded-lg transition-colors ${
+                  filter === key
+                    ? 'bg-white dark:bg-slate-950 text-slate-900 dark:text-white shadow-sm'
+                    : 'text-slate-500 dark:text-slate-400'
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
           <ThemeToggle />
           <button
             onClick={() => setSoundEnabled(!soundEnabled)}
@@ -158,110 +229,183 @@ export const KitchenKDS: React.FC = () => {
             <p className="text-xs text-slate-500 mt-1">Incoming QR &amp; Waiter orders will chime here in real time.</p>
           </div>
         ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-5">
-            {tickets.map((t) => {
-              const isUrgent = (Date.now() - new Date(t.created_at).getTime()) > 15 * 60000;
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-x-6 gap-y-9 pt-4">
+            {visible.map((t, ti) => {
+              const mins = getMins(t.created_at);
+              const isUrgent = mins >= 15;
+              const isWarn = mins >= 10 && !isUrgent;
+              const isNew = t.ticket_status === 'new';
+              const tableLabel =
+                t.order_type === 'dine_in'
+                  ? `Table ${t.table_number ? String(t.table_number).replace(/^T-0?/, '') : ''}`
+                  : 'Takeaway';
+              const accent = isNew ? '#f59e0b' : '#6366f1';
+              const tilt = ((ti * 7) % 5 - 2) * 0.25;
+              const itemCount = (t.items || []).reduce((n: number, it: any) => n + (it.quantity || 0), 0);
 
               return (
                 <div
                   key={t.ticket_id}
-                  className={`bg-white dark:bg-slate-900 border-2 rounded-3xl overflow-hidden flex flex-col justify-between shadow-lg transition-all ${
-                    t.ticket_status === 'preparing'
-                      ? 'border-indigo-500/80'
-                      : isUrgent
-                      ? 'border-rose-500'
-                      : 'border-slate-200 dark:border-slate-800'
-                  }`}
+                  className="kds-bill relative"
+                  style={{ transform: `rotate(${tilt}deg)` }}
                 >
-                  {/* Card Header */}
-                  <div className={`p-4 border-b ${
-                    t.ticket_status === 'preparing'
-                      ? 'bg-indigo-50 dark:bg-indigo-950/40 border-indigo-200 dark:border-indigo-900/60'
-                      : 'bg-slate-50 dark:bg-slate-950/60 border-slate-200 dark:border-slate-800'
-                  }`}>
-                    <div className="flex items-center justify-between">
-                      <span className="text-lg font-black text-slate-900 dark:text-white font-mono">
-                        {t.ticket_number}
-                      </span>
-                      <span className={`px-2.5 py-1 rounded-full text-xs font-bold ${
-                        t.order_type === 'dine_in'
-                          ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border border-emerald-500/20'
-                          : 'bg-amber-500/10 text-amber-700 dark:text-amber-400 border border-amber-500/20'
-                      }`}>
-                        {t.order_type === 'dine_in' ? `Table ${t.table_number ? String(t.table_number).replace(/^T-0?/, '') : ''}${t.round_number ? ` • Order ${t.round_number}` : ''}` : 'Takeaway'}
-                      </span>
+                  {/* metal clip */}
+                  <div className="absolute -top-3.5 left-1/2 -translate-x-1/2 z-20 flex flex-col items-center">
+                    <div className="w-16 h-6 rounded-md bg-gradient-to-b from-slate-300 via-slate-400 to-slate-500 border border-slate-500/60 shadow-md flex items-center justify-center">
+                      <div className="w-9 h-2 rounded-full bg-slate-700/70 shadow-inner" />
                     </div>
-
-                    <div className="flex items-center justify-between text-xs text-slate-500 dark:text-slate-400 mt-2">
-                      <span className="font-semibold text-slate-700 dark:text-slate-300">
-                        Order {t.order_number} {t.round_number ? `(Round ${t.round_number})` : ''}
-                      </span>
-                      <span className="flex items-center gap-1 font-mono">
-                        <Clock className="w-3.5 h-3.5" />
-                        {getElapsedTime(t.created_at)}
-                      </span>
-                    </div>
+                    <div className="w-9 h-1.5 -mt-0.5 rounded-b bg-slate-600/80" />
                   </div>
 
-                  {/* Items List */}
-                  <div className="p-4 space-y-3 flex-1 overflow-y-auto max-h-72">
-                    {t.items?.map((item: any, idx: number) => (
-                      <div key={idx} className="border-b border-slate-100 dark:border-slate-800/80 pb-2.5 last:border-none">
+                  <div style={{ filter: 'drop-shadow(0 10px 16px rgba(15,23,42,0.28))' }}>
+                    <div
+                      className={`relative text-slate-900 flex flex-col ${isUrgent ? 'ring-2 ring-rose-500' : ''}`}
+                      style={{ background: '#fffdf6', borderTop: `8px solid ${accent}` }}
+                    >
+                      {/* Header */}
+                      <div className="px-4 pt-5 pb-3">
                         <div className="flex items-start justify-between gap-2">
-                          <span className="text-base font-black text-slate-900 dark:text-white leading-tight">
-                            {item.quantity}x {item.name_snapshot}
+                          <div>
+                            <div className="text-[10px] font-bold tracking-[0.2em] uppercase text-slate-400">Kitchen order</div>
+                            <div className="text-2xl font-black font-mono leading-none mt-1">{t.ticket_number}</div>
+                          </div>
+                          <span
+                            className={`px-2.5 py-1 rounded-full text-[10px] font-black uppercase tracking-wider flex items-center gap-1 ${
+                              isNew ? 'bg-amber-100 text-amber-800' : 'bg-indigo-100 text-indigo-800'
+                            }`}
+                          >
+                            {isNew ? <BellRing className="w-3 h-3" /> : <Flame className="w-3 h-3" />}
+                            {isNew ? 'New' : 'Cooking'}
                           </span>
                         </div>
 
-                        {item.variant_name_snapshot && (
-                          <div className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                            Portion: <span className="text-slate-800 dark:text-slate-200 font-semibold">{item.variant_name_snapshot}</span>
+                        <div className="mt-3 flex items-center justify-between gap-2">
+                          <div className="flex items-center gap-2 min-w-0">
+                            <span
+                              className={`px-3 py-1.5 rounded-xl text-sm font-black ${
+                                t.order_type === 'dine_in' ? 'bg-slate-900 text-white' : 'bg-amber-500 text-white'
+                              }`}
+                            >
+                              {tableLabel}
+                            </span>
+                            {t.round_number > 1 && (
+                              <span className="text-[11px] font-bold text-slate-500">Round {t.round_number}</span>
+                            )}
                           </div>
-                        )}
+                          <span
+                            className={`flex items-center gap-1 text-sm font-black font-mono px-2 py-1 rounded-lg ${
+                              isUrgent
+                                ? 'bg-rose-100 text-rose-700'
+                                : isWarn
+                                ? 'bg-amber-100 text-amber-700'
+                                : 'bg-slate-100 text-slate-600'
+                            }`}
+                          >
+                            <Clock className="w-3.5 h-3.5" />
+                            {mins < 1 ? 'Now' : `${mins}m`}
+                          </span>
+                        </div>
+                        <div className="mt-2 text-[11px] text-slate-400 font-mono">
+                          #{t.order_number} · {itemCount} {itemCount === 1 ? 'item' : 'items'}
+                        </div>
+                      </div>
 
-                        {item.modifiers && item.modifiers.length > 0 && (
-                          <div className="text-[11px] text-amber-600 dark:text-amber-400 mt-0.5 font-medium">
-                            Mods: {item.modifiers.map((m: any) => m.name).join(', ')}
+                      {/* perforation */}
+                      <div className="relative">
+                        <div className="border-t-2 border-dashed border-slate-300" />
+                        <span className="absolute -left-2 -top-2 w-4 h-4 rounded-full bg-slate-100 dark:bg-slate-950" />
+                        <span className="absolute -right-2 -top-2 w-4 h-4 rounded-full bg-slate-100 dark:bg-slate-950" />
+                      </div>
+
+                      {/* Items */}
+                      <div className="px-4 py-3 space-y-3 max-h-80 overflow-y-auto">
+                        {t.items?.map((item: any, idx: number) => (
+                          <div key={idx} className="flex items-center gap-3">
+                            <div className="relative shrink-0">
+                              <div className="w-16 h-16 rounded-2xl overflow-hidden bg-slate-100 border border-slate-200 flex items-center justify-center">
+                                {item.image_url ? (
+                                  <img src={item.image_url} alt="" loading="lazy" className="w-full h-full object-cover" />
+                                ) : (
+                                  <Utensils className="w-6 h-6 text-slate-300" />
+                                )}
+                              </div>
+                              <span className="absolute -top-2 -left-2 min-w-[28px] h-7 px-1.5 rounded-lg bg-slate-900 text-white text-sm font-black flex items-center justify-center border-2 border-[#fffdf6]">
+                                {item.quantity}×
+                              </span>
+                            </div>
+
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-start gap-1.5">
+                                <span
+                                  className={`mt-1.5 w-2.5 h-2.5 rounded-full shrink-0 ${
+                                    item.dietary_type === 'non_veg' ? 'bg-rose-500' : item.dietary_type === 'egg' ? 'bg-amber-500' : 'bg-emerald-500'
+                                  }`}
+                                />
+                                <span className="text-base font-black leading-tight">{item.name_snapshot}</span>
+                              </div>
+                              {item.variant_name_snapshot && (
+                                <div className="text-xs text-slate-500 mt-0.5">
+                                  Portion: <span className="font-bold text-slate-800">{item.variant_name_snapshot}</span>
+                                </div>
+                              )}
+                              {item.modifiers && item.modifiers.length > 0 && (
+                                <div className="text-[11px] font-bold text-amber-700 mt-0.5">
+                                  + {item.modifiers.map((m: any) => m.name).join(', ')}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        ))}
+
+                        {t.order_notes && (
+                          <div className="p-2.5 rounded-xl bg-amber-50 border border-amber-300 text-amber-800 text-xs font-bold">
+                            Note: {t.order_notes}
                           </div>
                         )}
                       </div>
-                    ))}
 
-                    {t.order_notes && (
-                      <div className="p-2.5 rounded-xl bg-amber-50 dark:bg-amber-500/10 border border-amber-200 dark:border-amber-500/20 text-amber-700 dark:text-amber-300 text-xs font-semibold">
-                        Note: {t.order_notes}
+                      {/* perforation */}
+                      <div className="border-t-2 border-dashed border-slate-300" />
+
+                      {/* Actions */}
+                      <div className="p-3.5 pb-4 flex items-center gap-2">
+                        {t.ticket_status === 'new' ? (
+                          <button
+                            onClick={() => handleUpdateStatus(t.ticket_id, 'preparing')}
+                            className="flex-1 bg-indigo-600 hover:bg-indigo-500 active:scale-[0.98] text-white font-black py-3.5 rounded-xl text-sm transition-all flex items-center justify-center gap-2"
+                          >
+                            <Play className="w-4 h-4 fill-white" />
+                            Start Cooking
+                          </button>
+                        ) : (
+                          <button
+                            onClick={() => handleUpdateStatus(t.ticket_id, 'ready')}
+                            className="flex-1 bg-emerald-600 hover:bg-emerald-500 active:scale-[0.98] text-white font-black py-3.5 rounded-xl text-sm transition-all flex items-center justify-center gap-2"
+                          >
+                            <CheckCircle className="w-4 h-4" />
+                            Mark Ready
+                          </button>
+                        )}
+
+                        <button
+                          onClick={() => handleDeleteTicket(t.ticket_id, t.order_number)}
+                          className="px-3.5 py-3.5 rounded-xl border border-rose-300 text-rose-600 hover:bg-rose-50 active:scale-[0.98] font-bold text-xs flex items-center gap-1.5 transition-all shrink-0"
+                          title="Cancel & Void Order from Kitchen (Logged on Manager Dashboard)"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                          <span>Void</span>
+                        </button>
                       </div>
-                    )}
-                  </div>
+                    </div>
 
-                  {/* Actions Footer */}
-                  <div className="p-3.5 bg-slate-50 dark:bg-slate-950/80 border-t border-slate-200 dark:border-slate-800 flex items-center gap-2">
-                    {t.ticket_status === 'new' ? (
-                      <button
-                        onClick={() => handleUpdateStatus(t.ticket_id, 'preparing')}
-                        className="flex-1 bg-indigo-600 hover:bg-indigo-500 active:scale-98 text-white font-bold py-3 rounded-xl text-xs transition-all flex items-center justify-center gap-2 shadow-md shadow-indigo-900/20"
-                      >
-                        <Play className="w-3.5 h-3.5 fill-white" />
-                        Start Cooking
-                      </button>
-                    ) : (
-                      <button
-                        onClick={() => handleUpdateStatus(t.ticket_id, 'ready')}
-                        className="flex-1 bg-emerald-600 hover:bg-emerald-500 active:scale-98 text-white font-bold py-3 rounded-xl text-xs transition-all flex items-center justify-center gap-2 shadow-md shadow-emerald-900/20"
-                      >
-                        <CheckCircle className="w-3.5 h-3.5" />
-                        Mark Ready
-                      </button>
-                    )}
-
-                    <button
-                      onClick={() => handleDeleteTicket(t.ticket_id, t.order_number)}
-                      className="px-3.5 py-3 rounded-xl border border-rose-300 dark:border-rose-900/80 text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 active:scale-98 font-bold text-xs flex items-center gap-1.5 transition-all shrink-0"
-                      title="Cancel & Void Order from Kitchen (Logged on Manager Dashboard)"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                      <span>Void</span>
-                    </button>
+                    {/* torn bottom edge */}
+                    <div
+                      className="h-3 w-full"
+                      style={{
+                        background:
+                          'linear-gradient(-135deg, transparent 6px, #fffdf6 0) 0 0 / 14px 14px repeat-x, linear-gradient(135deg, transparent 6px, #fffdf6 0) 0 0 / 14px 14px repeat-x'
+                      }}
+                    />
                   </div>
                 </div>
               );

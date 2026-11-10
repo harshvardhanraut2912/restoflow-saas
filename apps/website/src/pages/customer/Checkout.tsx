@@ -17,7 +17,8 @@ export const CustomerCheckout: React.FC = () => {
     taxPaise,
     packagingChargePaise,
     grandTotalPaise,
-    clearCart
+    clearCart,
+    setTableContext
   } = useCart();
 
   const [phone, setPhone] = useState('');
@@ -67,6 +68,11 @@ export const CustomerCheckout: React.FC = () => {
       };
 
       const res = await customerApi.checkout(payload);
+
+      // Keep the running-bill / dashboard pointed at the live table session the order was bound to
+      if (orderType === 'dine_in' && res.table_session_id && res.table_session_id !== tableContext.sessionId) {
+        setTableContext({ ...tableContext, sessionId: res.table_session_id });
+      }
 
       // Trigger celebratory confetti
       confetti({
